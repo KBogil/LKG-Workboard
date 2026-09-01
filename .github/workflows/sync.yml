@@ -2,7 +2,9 @@ name: Sync Google Sheets to JSON
 
 on:
   schedule:
+    # 30분마다 자동 실행 (UTC 기준 시간이라 한국시간과 9시간 차이납니다)
     - cron: '*/30 * * * *'
+  # 이 버튼을 누르면 수동으로도 즉시 실행할 수 있습니다 (Actions 탭 > Run workflow)
   workflow_dispatch:
 
 permissions:
@@ -28,6 +30,7 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          WORKBOARD_PIN: ${{ secrets.WORKBOARD_PIN }}
         run: python scripts/sync_sheets.py
 
       - name: 변경된 내용이 있으면 저장소에 반영
