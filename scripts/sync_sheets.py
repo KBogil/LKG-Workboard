@@ -5,16 +5,42 @@
 - config/sources.json 에 등록된 각 source마다:
     - gid가 있으면: 그 gid(탭 고유번호)에 해당하는 탭을 읽습니다.
     - dynamic_month가 true이면: "OO년 O월" 형식의 "이번 달" 탭을 자동으로 찾아 읽습니다.
-- 결과는 data/workboard.json 하나에 소스별로 나뉘어 저장됩니다.
+- 결과는 WORKBOARD_PIN(핀번호)으로 암호화되어 data/workboard.json에 저장됩니다.
 """
 
 import os
 import json
+import base64
+import hashlib
 from datetime import datetime, timezone, timedelta
 import requests
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
+PBKDF2_ITERATIONS = 200000
+AES_KEY_LEN = 32  # AES-256
+
+
+def encrypt_json(data: dict, passphrase: str) -> dict:
+    """딕셔너리를 JSON 문자열로 만든 뒤, 핀번호(passphrase)로 AES-GCM 암호화합니다.
+    브라우저(app.js)에서 같은 방식(PBKDF2 + AES-GCM)으로 복호화합니다."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    salt = os.urandom(16)
+    key = hashlib.pbkdf2_hmac(
+        "sha256", passphrase.encode("utf-8"), salt, PBKDF2_ITERATIONS, dklen=AES_KEY_LEN
+    )
+    iv = os.urandom(12)
+    plaintext = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    ciphertext = AESGCM(key).encrypt(iv, plaintext, None)
+
+    return {
+        "encrypted": True,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "iv": base64.b64encode(iv).decode("ascii"),
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+        "iterations": PBKDF2_ITERATIONS,
+    }
 
 
 def get_access_token():
@@ -99,7 +125,6 @@ def rows_to_records(rows):
     header = rows[header_idx]
     records = []
     for row in rows[header_idx + 1:]:
-        # 완전히 빈 행은 건너뜁니다 (서식만 있고 값은 없는 행 등).
         if not any(cell.strip() for cell in row):
             continue
         record = {}
@@ -149,10 +174,12 @@ def main():
         print(f"[완료] {key} ({title}): {len(records)}건")
 
     os.makedirs("data", exist_ok=True)
+    passphrase = os.environ["WORKBOARD_PIN"]
+    encrypted_output = encrypt_json(output, passphrase)
     with open("data/workboard.json", "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
+        json.dump(encrypted_output, f, ensure_ascii=False, indent=2)
 
-    print("data/workboard.json 저장 완료")
+    print("data/workboard.json 저장 완료 (암호화됨)")
 
 
 if __name__ == "__main__":
