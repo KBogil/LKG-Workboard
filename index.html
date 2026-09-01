@@ -8,7 +8,17 @@
 </head>
 <body>
 
-<div class="app">
+<div class="lock-overlay" id="lockOverlay">
+  <div class="lock-box">
+    <h2>LKG Workboard</h2>
+    <p>핀번호를 입력하면 대시보드가 열립니다.</p>
+    <input type="password" id="pinInput" placeholder="핀번호" autocomplete="off" />
+    <button id="pinSubmit">확인</button>
+    <p class="lock-error" id="lockError"></p>
+  </div>
+</div>
+
+<div class="app" id="appRoot" style="display:none;">
 
   <!-- 사이드바 -->
   <aside class="sidebar" id="sidebar">
@@ -50,7 +60,6 @@
     </header>
 
     <section class="content" id="content">
-      <!-- JS가 각 카테고리 내용을 여기에 채워 넣습니다 -->
       <p class="loading">데이터를 불러오는 중입니다...</p>
     </section>
   </main>
