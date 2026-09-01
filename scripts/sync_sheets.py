@@ -82,12 +82,26 @@ def get_values(spreadsheet_id, sheet_title, access_token):
 
 
 def rows_to_records(rows):
-    """첫 행을 헤더(열 이름)로 보고, 나머지 행을 {열이름: 값} 형태로 변환합니다."""
+    """완전히 빈 선행 행은 건너뛰고, 실제 내용이 있는 첫 행을 헤더(열 이름)로 보고
+    나머지 행을 {열이름: 값} 형태로 변환합니다."""
     if not rows:
         return []
-    header = rows[0]
+
+    header_idx = 0
+    while header_idx < len(rows) and not any(
+        cell.strip() for cell in rows[header_idx]
+    ):
+        header_idx += 1
+
+    if header_idx >= len(rows):
+        return []
+
+    header = rows[header_idx]
     records = []
-    for row in rows[1:]:
+    for row in rows[header_idx + 1:]:
+        # 완전히 빈 행은 건너뜁니다 (서식만 있고 값은 없는 행 등).
+        if not any(cell.strip() for cell in row):
+            continue
         record = {}
         for i, col_name in enumerate(header):
             record[col_name] = row[i] if i < len(row) else ""
