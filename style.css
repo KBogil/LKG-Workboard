@@ -416,3 +416,72 @@ table.data-table tr:hover td {
   .sidebar { position: fixed; z-index: 10; height: 100vh; }
   .content, .topbar { padding-left: 20px; padding-right: 20px; }
 }
+
+/* ---------- 잠금 화면 ---------- */
+.lock-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.lock-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 36px 32px;
+  width: 100%;
+  max-width: 320px;
+  text-align: center;
+}
+
+.lock-box h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.lock-box p {
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.lock-box input {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  margin-bottom: 12px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.lock-box button {
+  width: 100%;
+  padding: 11px 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.lock-box button:hover {
+  opacity: 0.92;
+}
+
+.lock-error {
+  min-height: 16px;
+  color: #B5442E;
+  font-size: 12.5px;
+  margin: 10px 0 0 !important;
+}
