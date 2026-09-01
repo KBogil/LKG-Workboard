@@ -2,8 +2,8 @@ name: Sync Google Sheets to JSON
 
 on:
   schedule:
-    # 30분마다 자동 실행 (UTC 기준 시간이라 한국시간과 9시간 차이납니다)
-    - cron: '*/30 * * * *'
+    # 5분마다 자동 실행 (깃허브 액션에서 가능한 최소 주기입니다. UTC 기준이라 한국시간과 9시간 차이납니다)
+    - cron: '*/5 * * * *'
   # 이 버튼을 누르면 수동으로도 즉시 실행할 수 있습니다 (Actions 탭 > Run workflow)
   workflow_dispatch:
 
