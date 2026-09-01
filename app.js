@@ -1,9 +1,10 @@
 /* LKG Workboard - app.js
-   data/workboard.json 을 불러와서 사이드바 카테고리별 화면을 그립니다. */
+   암호화된 data/workboard.json 을 불러와서, 핀번호 입력 후 복호화하여
+   사이드바 카테고리별 화면을 그립니다. */
 
 const DATA_URL = "./data/workboard.json";
 
-let WORKBOARD = null; // { generated_at, data: { key: [records...] } }
+let WORKBOARD = null; // 복호화된 { generated_at, data: { key: [records...] } }
 
 const els = {
   sidebar: document.getElementById("sidebar"),
@@ -12,6 +13,11 @@ const els = {
   pageTitle: document.getElementById("pageTitle"),
   content: document.getElementById("content"),
   lastUpdated: document.getElementById("lastUpdated"),
+  lockOverlay: document.getElementById("lockOverlay"),
+  appRoot: document.getElementById("appRoot"),
+  pinInput: document.getElementById("pinInput"),
+  pinSubmit: document.getElementById("pinSubmit"),
+  lockError: document.getElementById("lockError"),
 };
 
 const VIEW_TITLES = {
@@ -22,6 +28,65 @@ const VIEW_TITLES = {
   vehicle: "법인차량",
   mail: "우편물",
 };
+
+let ENCRYPTED_BLOB = null;
+
+/* ---------------- 암호화/복호화 유틸 ---------------- */
+
+function base64ToBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function deriveKey(passphrase, saltB64, iterations) {
+  const enc = new TextEncoder();
+  const salt = base64ToBytes(saltB64);
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw", enc.encode(passphrase), { name: "PBKDF2" }, false, ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["decrypt"]
+  );
+}
+
+async function decryptBlob(blob, passphrase) {
+  const key = await deriveKey(passphrase, blob.salt, blob.iterations);
+  const iv = base64ToBytes(blob.iv);
+  const ciphertext = base64ToBytes(blob.ciphertext);
+  const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+  return JSON.parse(new TextDecoder().decode(plainBuf));
+}
+
+/* ---------------- 잠금 화면 처리 ---------------- */
+
+async function tryUnlock() {
+  const pin = els.pinInput.value;
+  if (!pin) return;
+  els.lockError.textContent = "";
+  els.pinSubmit.disabled = true;
+  try {
+    WORKBOARD = await decryptBlob(ENCRYPTED_BLOB, pin);
+    els.lockOverlay.style.display = "none";
+    els.appRoot.style.display = "";
+    els.lastUpdated.textContent = "마지막 업데이트: " + formatDateTime(WORKBOARD.generated_at);
+    renderView("overview");
+  } catch (err) {
+    els.lockError.textContent = "핀번호가 올바르지 않습니다.";
+  } finally {
+    els.pinSubmit.disabled = false;
+  }
+}
+
+els.pinSubmit.addEventListener("click", tryUnlock);
+els.pinInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") tryUnlock();
+});
 
 /* ---------------- 초기화 ---------------- */
 
@@ -43,12 +108,11 @@ async function init() {
   try {
     const res = await fetch(DATA_URL, { cache: "no-store" });
     if (!res.ok) throw new Error("데이터를 불러오지 못했습니다.");
-    WORKBOARD = await res.json();
-    els.lastUpdated.textContent = "마지막 업데이트: " + formatDateTime(WORKBOARD.generated_at);
-    renderView("overview");
+    ENCRYPTED_BLOB = await res.json();
+    els.pinInput.disabled = false;
+    els.pinInput.focus();
   } catch (err) {
-    els.content.innerHTML = `<p class="empty-note">데이터를 불러오지 못했습니다. (${err.message})<br>data/workboard.json 파일이 있는지 확인해주세요.</p>`;
-    els.lastUpdated.textContent = "업데이트 확인 실패";
+    els.lockError.textContent = "데이터 파일을 불러오지 못했습니다. (" + err.message + ")";
   }
 }
 
@@ -79,13 +143,6 @@ function countBy(records, field) {
     map[v] = (map[v] || 0) + 1;
   });
   return Object.entries(map).sort((a, b) => b[1] - a[1]);
-}
-
-function el(tag, className, html) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (html !== undefined) node.innerHTML = html;
-  return node;
 }
 
 function renderTable(records, columns) {
