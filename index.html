@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LKG Workboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- 사이드바 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <button class="hamburger" id="hamburgerBtn" aria-label="메뉴 열기/닫기">
+        <span></span><span></span><span></span>
+      </button>
+      <span class="brand">LKG Workboard</span>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-view="overview">
+        <span class="nav-icon">▦</span><span class="nav-label">개요</span>
+      </button>
+      <button class="nav-item" data-view="jeonsan">
+        <span class="nav-icon">🖥</span><span class="nav-label">전산</span>
+      </button>
+      <button class="nav-item" data-view="tangbisil">
+        <span class="nav-icon">☕</span><span class="nav-label">탕비실</span>
+      </button>
+      <button class="nav-item" data-view="somopum">
+        <span class="nav-icon">📦</span><span class="nav-label">소모품</span>
+      </button>
+      <button class="nav-item" data-view="vehicle">
+        <span class="nav-icon">🚗</span><span class="nav-label">법인차량</span>
+      </button>
+      <button class="nav-item" data-view="mail">
+        <span class="nav-icon">✉</span><span class="nav-label">우편물</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer" id="lastUpdated">업데이트 확인 중...</div>
+  </aside>
+
+  <!-- 본문 -->
+  <main class="main">
+    <header class="topbar">
+      <h1 id="pageTitle">개요</h1>
+    </header>
+
+    <section class="content" id="content">
+      <!-- JS가 각 카테고리 내용을 여기에 채워 넣습니다 -->
+      <p class="loading">데이터를 불러오는 중입니다...</p>
+    </section>
+  </main>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
