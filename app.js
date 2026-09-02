@@ -20,15 +20,6 @@ const els = {
   lockError: document.getElementById("lockError"),
 };
 
-const VIEW_TITLES = {
-  overview: "개요",
-  jeonsan: "전산",
-  tangbisil: "탕비실",
-  somopum: "소모품",
-  vehicle: "법인차량",
-  mail: "우편물",
-};
-
 let ENCRYPTED_BLOB = null;
 
 /* ---------------- 암호화/복호화 유틸 ---------------- */
@@ -88,6 +79,16 @@ els.pinInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") tryUnlock();
 });
 
+const VIEW_TITLES = {
+  overview: "개요",
+  jeonsan: "전산",
+  tangbisil: "탕비실",
+  somopum: "소모품",
+  vehicle: "법인차량",
+  mail: "우편물",
+  annual: "연간 통계",
+};
+
 /* ---------------- 초기화 ---------------- */
 
 els.hamburgerBtn.addEventListener("click", () => {
@@ -145,6 +146,52 @@ function countBy(records, field) {
   return Object.entries(map).sort((a, b) => b[1] - a[1]);
 }
 
+/* "이재환(Jetty) 정성훈(Martin)" 처럼 담당자 셀 하나에 여러 명이 들어있는 경우,
+   "이름(영문)" 단위로 쪼개서 각각 따로 집계합니다. */
+function countByMultiName(records, field) {
+  const map = {};
+  records.forEach((r) => {
+    const raw = (r[field] || "").trim();
+    if (!raw) return;
+    const names = raw.match(/[^\s,\/、]+\([^()]*\)/g) || [raw];
+    names.forEach((n) => {
+      map[n] = (map[n] || 0) + 1;
+    });
+  });
+  return Object.entries(map).sort((a, b) => b[1] - a[1]);
+}
+
+/* "2026. 9. 1" 같은 날짜 문자열을 Date 객체로 변환. 형식이 안 맞으면 null. */
+function parseKDate(str) {
+  if (!str) return null;
+  const m = String(str).trim().match(/^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})/);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+function isSameMonth(d, ref) {
+  return d && d.getFullYear() === ref.getFullYear() && d.getMonth() === ref.getMonth();
+}
+
+/* 전산 데이터를 요청일자(없으면 완료일자) 기준으로 이번 달만 필터링 */
+function filterCurrentMonthJeonsan(records) {
+  const now = new Date();
+  return records.filter((r) => {
+    const d = parseKDate(r["요청일자"]) || parseKDate(r["완료일자"]);
+    return isSameMonth(d, now);
+  });
+}
+
+/* 날짜 열 이름을 모르는 카테고리용: "일자"/"날짜"가 들어간 열을 자동으로 찾아 이번 달만 필터.
+   그런 열을 못 찾으면 null을 반환합니다 (필터 불가 신호). */
+function filterCurrentMonthGeneric(records) {
+  if (!records.length) return records;
+  const field = Object.keys(records[0]).find((k) => k.includes("일자") || k.includes("날짜"));
+  if (!field) return null;
+  const now = new Date();
+  return records.filter((r) => isSameMonth(parseKDate(r[field]), now));
+}
+
 function renderTable(records, columns) {
   if (!records.length) {
     return `<div class="empty-note">표시할 데이터가 없습니다.</div>`;
@@ -194,54 +241,75 @@ function renderView(view) {
     somopum: () => renderGeneric("소모품 현황", "somopum"),
     vehicle: renderVehicle,
     mail: renderMail,
+    annual: renderAnnual,
   };
   const fn = renderers[view] || renderOverview;
   els.content.innerHTML = fn();
 }
 
 function renderOverview() {
-  const jeonsan = getRecords("jeonsan_status");
-  const tangbisil = getRecords("tangbisil");
-  const somopum = getRecords("somopum");
-  const vehicleLog = getRecords("vehicle_log");
-  const mail = getRecords("mail_log");
+  const jeonsanAll = getRecords("jeonsan_status");
+  const jeonsan = filterCurrentMonthJeonsan(jeonsanAll);
+  const tangbisil = getRecords("tangbisil"); // 이미 "이번 달" 탭만 가져옴
+  const somopumAll = getRecords("somopum");
+  const vehicleLogAll = getRecords("vehicle_log");
+  const mailAll = getRecords("mail_log");
 
-  const rankData = countBy(jeonsan, "담당자").slice(0, 4);
+  const somopum = filterCurrentMonthGeneric(somopumAll);
+  const vehicleLog = filterCurrentMonthGeneric(vehicleLogAll);
+  const mail = filterCurrentMonthGeneric(mailAll);
+
+  const rankData = countByMultiName(jeonsan, "담당자").slice(0, 4);
   const maxCount = rankData.length ? rankData[0][1] : 0;
+
+  const now = new Date();
+  const monthLabel = `${now.getFullYear()}년 ${now.getMonth() + 1}월`;
 
   return `
     <div class="banner-row">
       <div class="banner-card">
         <h2>LKG Workboard 개요</h2>
-        <p>전산 · 탕비실 · 소모품 · 법인차량 · 우편물 업무 현황을 한눈에 확인하세요.</p>
+        <p>${monthLabel} 기준 · 전산 · 탕비실 · 소모품 · 법인차량 · 우편물 업무 현황을 한눈에 확인하세요.</p>
       </div>
       <div class="banner-side">
         <h3>자동 업데이트</h3>
-        <p>구글 시트 입력 내용이 30분마다 자동으로 이 화면에 반영됩니다.</p>
+        <p>구글 시트 입력 내용이 5분마다 자동으로 이 화면에 반영됩니다. 전체 누적 통계는 왼쪽 '연간 통계' 메뉴에서 확인하세요.</p>
       </div>
     </div>
 
     <div class="kpi-grid">
-      ${kpiCard("전산 업무", jeonsan.length + "건", "누적 업무현황 로그")}
-      ${kpiCard("탕비실", tangbisil.length + "건", "이번 달 기록")}
-      ${kpiCard("소모품", somopum.length + "건", "누적 불출/요청")}
-      ${kpiCard("법인차량", vehicleLog.length + "건", "운행일지 기록")}
-      ${kpiCard("우편물", mail.length + "건", "누적 접수 기록")}
+      ${kpiCard("전산 업무", jeonsan.length + "건", monthLabel + " 기준")}
+      ${kpiCard("탕비실", tangbisil.length + "건", monthLabel + " 기준")}
+      ${
+        somopum === null
+          ? kpiCard("소모품", somopumAll.length + "건", "전체 누적 (날짜 열 미확인)")
+          : kpiCard("소모품", somopum.length + "건", monthLabel + " 기준")
+      }
+      ${
+        vehicleLog === null
+          ? kpiCard("법인차량", vehicleLogAll.length + "건", "전체 누적 (날짜 열 미확인)")
+          : kpiCard("법인차량", vehicleLog.length + "건", monthLabel + " 기준")
+      }
+      ${
+        mail === null
+          ? kpiCard("우편물", mailAll.length + "건", "전체 누적 (날짜 열 미확인)")
+          : kpiCard("우편물", mail.length + "건", monthLabel + " 기준")
+      }
     </div>
 
-    <h2 class="section-title">전산 업무 처리 Top 담당자</h2>
+    <h2 class="section-title">전산 업무 처리 담당자 (${monthLabel})</h2>
     <div class="rank-grid">
       ${
         rankData.length
           ? rankData.map(([name, count]) => rankCard(name, count, maxCount)).join("")
-          : `<div class="empty-note">담당자 데이터가 없습니다.</div>`
+          : `<div class="empty-note">이번 달 담당자 데이터가 없습니다.</div>`
       }
     </div>
 
     <div class="panel">
       <div class="panel-header">
         <h2>최근 전산 업무 (최신 10건)</h2>
-        <span class="panel-meta">업무현황 로그 기준</span>
+        <span class="panel-meta">${monthLabel} 기준</span>
       </div>
       <div class="panel-body">
         ${renderTable(jeonsan.slice(-10).reverse(), ["유형","요청자","부서","자산번호","업무내용","담당자","완료일자","진행상태"])}
@@ -261,6 +329,9 @@ function renderJeonsan() {
   const byDept = countBy(asset, "부서").slice(0, 4);
   const maxDept = byDept.length ? byDept[0][1] : 0;
 
+  const byHandler = countByMultiName(status, "담당자").slice(0, 6);
+  const maxHandler = byHandler.length ? byHandler[0][1] : 0;
+
   return `
     <div class="kpi-grid">
       ${kpiCard("총 업무 건수", status.length + "건")}
@@ -269,7 +340,16 @@ function renderJeonsan() {
       ${kpiCard("자산 지급대장 건수", asset.length + "건")}
     </div>
 
-    <h2 class="section-title">부서별 자산 보유 Top</h2>
+    <h2 class="section-title">담당자별 처리 건수 (전체 누적)</h2>
+    <div class="rank-grid">
+      ${
+        byHandler.length
+          ? byHandler.map(([name, count]) => rankCard(name, count, maxHandler)).join("")
+          : `<div class="empty-note">담당자 데이터가 없습니다.</div>`
+      }
+    </div>
+
+    <h2 class="section-title">부서별 자산 보유</h2>
     <div class="rank-grid">
       ${
         byDept.length
@@ -350,6 +430,62 @@ function renderMail() {
     <div class="panel">
       <div class="panel-header"><h2>명함 · 네임플레이트 관리</h2><span class="panel-meta">${namecard.length}건</span></div>
       <div class="panel-body">${renderTable(namecard)}</div>
+    </div>
+  `;
+}
+
+function monthBarChart(records, dateField) {
+  const counts = {};
+  records.forEach((r) => {
+    const d = parseKDate(r[dateField]);
+    if (!d) return;
+    const key = `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  const entries = Object.entries(counts).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  if (!entries.length) return `<div class="empty-note">날짜 데이터를 찾을 수 없습니다.</div>`;
+  const max = Math.max(...entries.map(([, c]) => c));
+  const rows = entries
+    .map(
+      ([label, count]) => `
+      <div class="bar-row">
+        <div class="bar-label">${label}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${Math.round((count / max) * 100)}%"></div></div>
+        <div class="bar-count">${count}건</div>
+      </div>`
+    )
+    .join("");
+  return `<div class="bar-chart">${rows}</div>`;
+}
+
+function renderAnnual() {
+  const jeonsan = getRecords("jeonsan_status");
+  const tangbisil = getRecords("tangbisil");
+  const somopum = getRecords("somopum");
+  const vehicleLog = getRecords("vehicle_log");
+  const mail = getRecords("mail_log");
+
+  return `
+    <div class="kpi-grid">
+      ${kpiCard("전산 업무", jeonsan.length + "건", "전체 누적")}
+      ${kpiCard("탕비실", tangbisil.length + "건", "이번 달 탭 기준")}
+      ${kpiCard("소모품", somopum.length + "건", "전체 누적")}
+      ${kpiCard("법인차량", vehicleLog.length + "건", "전체 누적")}
+      ${kpiCard("우편물", mail.length + "건", "전체 누적")}
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>전산 업무 월별 추이</h2>
+        <span class="panel-meta">요청일자 기준</span>
+      </div>
+      <div class="panel-body">
+        ${monthBarChart(jeonsan, "요청일자")}
+      </div>
+    </div>
+
+    <div class="empty-note" style="text-align:left; padding: 4px 4px 0;">
+      탕비실 · 소모품 · 법인차량 · 우편물의 월별 그래프는 각 시트의 날짜 열 이름을 확인한 뒤 추가할 예정이에요.
     </div>
   `;
 }
