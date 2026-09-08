@@ -25,6 +25,7 @@ const els = {
 };
 
 let ENCRYPTED_BLOB = null;
+let MAIL_MODAL_KIND = null; // 메일룸 팝업이 열려 있으면 그 대장 키
 
 /* ---------------- 암호화/복호화 유틸 ---------------- */
 
@@ -89,7 +90,7 @@ const VIEW_TITLES = {
   tangbisil: "탕비실",
   somopum: "소모품",
   vehicle: "법인차량",
-  mail: "우편물",
+  mail: "메일룸",
   annual: "연간 통계",
 };
 
@@ -136,6 +137,7 @@ function formatDateTime(iso) {
 /* ---------------- 상세 팝업 ---------------- */
 
 function openModal(title, bodyHtml) {
+  MAIL_MODAL_KIND = null; // 메일룸 팝업이 아니면 그쪽 클릭 처리를 꺼둡니다
   els.modalTitle.textContent = title;
   els.modalBody.innerHTML = bodyHtml;
   els.modalBackdrop.hidden = false;
@@ -292,11 +294,15 @@ function isNumericColumn(name) {
   return /수량|건수|개수|사용량|입고량|재고|금액|개입/.test(name);
 }
 
-/* 진행상태 같은 열은 배지로 그려서 눈에 잘 띄게 합니다. */
+/* 진행상태·전달여부 같은 열은 배지로 그려서 눈에 잘 띄게 합니다.
+   반송/반려는 놓치면 안 되는 건이라 가장 강한 색(채워진 빨강)으로 칠합니다. */
 function statusCellHtml(value) {
   const text = String(value ?? "").trim();
   if (!text) return "-";
-  const done = /완료|정상|반납|지급/.test(text);
+  if (/반송|반려|실패|미전달/.test(text)) {
+    return `<span class="badge danger">${escapeHtml(text)}</span>`;
+  }
+  const done = /완료|정상|반납|지급|전달/.test(text);
   return `<span class="badge ${done ? "done" : "warn"}">${escapeHtml(text)}</span>`;
 }
 
@@ -368,13 +374,22 @@ function renderTable(records, columns, opts) {
       const cells = cols
         .map((c) => {
           const raw = r[c] ?? "";
-          if (/상태/.test(c)) return `<td>${statusCellHtml(raw)}</td>`;
+          if (/상태|여부/.test(c)) return `<td>${statusCellHtml(raw)}</td>`;
           const text = raw === "" ? "-" : String(raw);
           // title 속성을 넣어두면 잘린 내용도 마우스를 올려 확인할 수 있습니다.
           return `<td class="${isNumericColumn(c) ? "num" : ""}" title="${escapeHtml(text)}">${escapeHtml(text)}</td>`;
         })
         .join("");
-      const attrs = clickable ? ` class="row-clickable" data-table="${tableId}" data-row="${i}"` : "";
+      // 반송 건처럼 눈에 띄어야 하는 행은 rowClass로 배경·왼쪽 띠를 줍니다.
+      const rowClass = [
+        clickable ? "row-clickable" : "",
+        options.rowClass ? options.rowClass(r) || "" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const attrs =
+        (rowClass ? ` class="${rowClass}"` : "") +
+        (clickable ? ` data-table="${tableId}" data-row="${i}"` : "");
       return `<tr${attrs}>${cells}</tr>`;
     })
     .join("");
@@ -466,7 +481,7 @@ function renderOverview() {
     <div class="banner-row">
       <div class="banner-card">
         <h2>LKG Workboard 개요</h2>
-        <p>${monthLabel} 기준 · 전산 · 탕비실 · 소모품 · 법인차량 · 우편물 업무 현황을 한눈에 확인하세요.</p>
+        <p>${monthLabel} 기준 · 전산 · 탕비실 · 소모품 · 법인차량 · 메일룸 업무 현황을 한눈에 확인하세요.</p>
       </div>
       <div class="banner-side">
         <h3>자동 업데이트</h3>
@@ -493,8 +508,8 @@ function renderOverview() {
       }
       ${
         mail === null
-          ? kpiCard("우편물", mailAll.length + "건", "전체 누적 (날짜 열 미확인)")
-          : kpiCard("우편물", mail.length + "건", monthLabel + " 기준")
+          ? kpiCard("메일룸", mailAll.length + "건", "전체 누적 (날짜 열 미확인)")
+          : kpiCard("메일룸", mail.length + "건", monthLabel + " 기준")
       }
     </div>
 
@@ -508,7 +523,7 @@ function renderOverview() {
       )}
       ${ownerCard("소모품", "박동국(Kaju)", (somopum === null ? somopumAll : somopum).length + "건")}
       ${ownerCard("법인차량", "박동국(Kaju)", (vehicleLog === null ? vehicleLogAll : vehicleLog).length + "건")}
-      ${ownerCard("우편물", "박동국(Kaju)", (mail === null ? mailAll : mail).length + "건")}
+      ${ownerCard("메일룸", "박동국(Kaju)", (mail === null ? mailAll : mail).length + "건")}
     </div>
   `;
 }
@@ -784,7 +799,7 @@ function renderJeonsan() {
       <p class="section-note">아래 세 표는 그대로 두고, 별도 창에서 크루별 기록만 따로 찾아봅니다.</p>
 
       <div class="search-bar">
-        <input type="search" id="crewSearch" placeholder="한글 이름 또는 영문 닉네임 (예: 이재환 / Jetty)" autocomplete="off" />
+        <input type="search" id="crewSearch" placeholder="한글 이름 또는 영문 닉네임 (예: 곽보길 / Charles)" autocomplete="off" />
         <button class="crew-search-btn" id="crewSearchBtn">조회</button>
       </div>
 
@@ -817,7 +832,7 @@ function renderJeonsan() {
 
     <div class="panel">
       <div class="panel-header"><h2>자산 지급대장</h2><span class="panel-meta">${asset.length}건</span></div>
-      <div class="panel-body">${renderTable(asset, null, { detailTitle: "자산 지급 상세", center: true })}</div>
+      <div class="panel-body">${renderTable(asset.slice().reverse(), null, { detailTitle: "자산 지급 상세", center: true })}</div>
     </div>
 
     <div class="panel">
@@ -1494,7 +1509,7 @@ function renderSomopum() {
       <p class="section-note">크루 이름으로 찾으면, 그 크루에게 나간 소모품 종류와 수량을 별도 창에서 보여줍니다.</p>
 
       <div class="search-bar">
-        <input type="search" id="somSearch" placeholder="한글 이름 또는 영문 닉네임 (예: 김예림 / Rimmy)" autocomplete="off" />
+        <input type="search" id="somSearch" placeholder="한글 이름 또는 영문 닉네임 (예: 곽보길 / Charles)" autocomplete="off" />
         <button class="crew-search-btn" id="somSearchBtn">조회</button>
       </div>
 
@@ -1573,22 +1588,309 @@ function renderVehicle() {
   `;
 }
 
+/* ---------------- 메일룸 (우편물 / 인쇄물) ---------------- */
+
+/* 두 대장은 시트 서식이 달라서, 다른 점만 여기 표로 적어두고
+   화면 그리는 코드는 하나만 씁니다. */
+const MAIL_SOURCES = {
+  post: {
+    key: "mail_log",
+    label: "우편물 · 등기 · 택배",
+    short: "우편물",
+    dateField: "도달일",
+    nameFields: ["수령자", "수신자", "전달자"],
+    columns: ["유형", "도달일", "수령자", "수신자", "발신처", "등기번호(운송장)",
+              "전달자", "전달/반송여부", "비고"],
+    statusField: "전달/반송여부",
+    detailTitle: "우편물 상세",
+    emptyThisMonth: "해당 월 도착한 우편물이 없습니다.",
+  },
+  print: {
+    key: "namecard",
+    label: "인쇄물 · 네임플레이트 · 명함",
+    short: "인쇄물",
+    dateField: "전달일",
+    nameFields: ["전달자(영어명)", "수령자(영어명)"],
+    columns: ["유형", "전달일", "전달자(영어명)", "수령자(영어명)", "부서", "개수",
+              "전달여부", "요청 링크", "비고"],
+    statusField: "전달여부",
+    detailTitle: "인쇄물 상세",
+    emptyThisMonth: "해당 월 지급 건이 없습니다.",
+  },
+};
+
+/* 검색어 / 선택한 달 / 팝업에서 펼쳐 본 행을 대장별로 따로 기억합니다. */
+const MAIL_STATE = {
+  post: { query: "", month: null, match: [], row: null },
+  print: { query: "", month: null, match: [], row: null },
+};
+
+function mailRecords(kind) {
+  const src = MAIL_SOURCES[kind];
+  return getRecords(src.key).map((r) => ({ raw: r, date: parseKDate(pick(r, src.dateField)) }));
+}
+
+/* 최신 날짜가 맨 위로. 날짜를 못 읽은 행은 맨 아래로 보냅니다. */
+function sortNewestFirst(list) {
+  return list
+    .slice()
+    .sort((a, b) => (b.date ? b.date.getTime() : 0) - (a.date ? a.date.getTime() : 0));
+}
+
+function isReturned(record) {
+  return /반송|반려/.test(String(pick(record, "전달/반송여부", "전달여부", "여부")));
+}
+
+/* 자료에 실제로 있는 달 목록 (최근 것부터, 최대 12개) */
+function mailMonths(list) {
+  const set = new Set();
+  list.forEach((r) => {
+    if (r.date) set.add(monthKey(r.date));
+  });
+  return [...set].sort((a, b) => (a < b ? 1 : -1)).slice(0, 12);
+}
+
+function mailMonthLabel(key) {
+  const [y, m] = key.split(".");
+  return `${y}년 ${Number(m)}월`;
+}
+
+/* 월 선택 + 그 달의 기록 전체 */
+function mailMonthPanel(kind) {
+  const src = MAIL_SOURCES[kind];
+  const state = MAIL_STATE[kind];
+  const all = mailRecords(kind);
+  const months = mailMonths(all);
+
+  if (!months.length) {
+    return `<div class="empty-note">날짜를 읽을 수 있는 기록이 없습니다.</div>`;
+  }
+  if (!months.includes(state.month)) {
+    const now = new Date();
+    const thisKey = monthKey(now);
+    state.month = months.includes(thisKey) ? thisKey : months[0];
+  }
+
+  const tabs = months
+    .map(
+      (m) => `<button class="month-tab ${m === state.month ? "active" : ""}"
+        data-mail-month="${kind}" data-month="${m}">${escapeHtml(mailMonthLabel(m))}</button>`
+    )
+    .join("");
+
+  const rows = sortNewestFirst(all.filter((r) => r.date && monthKey(r.date) === state.month));
+  const returned = rows.filter((r) => isReturned(r.raw)).length;
+
+  const summary = `<div class="month-summary">${escapeHtml(mailMonthLabel(state.month))} · ${rows.length}건${
+    returned ? ` · <strong style="color:var(--danger)">반송 ${returned}건</strong>` : ""
+  }</div>`;
+
+  const table = renderTable(
+    rows.map((r) => r.raw),
+    src.columns,
+    {
+      detailTitle: src.detailTitle,
+      center: true,
+      emptyText: src.emptyThisMonth,
+      rowClass: (rec) => (isReturned(rec) ? "row-alert" : ""),
+    }
+  );
+
+  return `<div class="month-tabs">${tabs}</div>${summary}${table}`;
+}
+
+/* --- 크루 검색 팝업 --- */
+
+function mailModalBody(kind) {
+  const src = MAIL_SOURCES[kind];
+  const state = MAIL_STATE[kind];
+  const rows = state.match;
+  if (!rows.length) return `<div class="empty-note">기록이 없습니다.</div>`;
+
+  if (state.row !== null && rows[state.row]) {
+    return `<button class="modal-back" data-mail-back>◀ 목록으로</button>
+      ${recordDetailHtml(rows[state.row])}`;
+  }
+
+  const returned = rows.filter(isReturned).length;
+
+  return `<p class="modal-note">'${escapeHtml(state.query)}' · 총 ${rows.length}건 · 최신순${
+    returned ? ` · <strong>반송 ${returned}건</strong>` : ""
+  }</p>
+    ${renderTable(rows, src.columns, {
+      detailTitle: src.detailTitle,
+      center: true,
+      emptyText: "기록이 없습니다.",
+      rowClass: (rec) => (isReturned(rec) ? "row-alert" : ""),
+    })}`;
+}
+
+function refreshMailModal(kind) {
+  const src = MAIL_SOURCES[kind];
+  const state = MAIL_STATE[kind];
+  const modal = document.querySelector(".modal");
+  if (modal) modal.classList.toggle("modal-wide", state.row === null);
+  openModal(`${state.query} · ${src.short} 조회`, mailModalBody(kind));
+  MAIL_MODAL_KIND = kind; // openModal이 끈 뒤에 다시 켭니다
+}
+
+function openMailModal(kind) {
+  const src = MAIL_SOURCES[kind];
+  const state = MAIL_STATE[kind];
+  const box = document.getElementById(`mailResult-${kind}`);
+  const query = state.query.trim();
+
+  if (!query) {
+    if (box) box.innerHTML = `<div class="empty-note">조회할 크루 이름을 입력해주세요.</div>`;
+    return;
+  }
+
+  const needle = query.toLowerCase();
+  state.match = sortNewestFirst(
+    mailRecords(kind).filter((r) => matchesCrew(r.raw, needle, src.nameFields))
+  ).map((r) => r.raw);
+
+  if (!state.match.length) {
+    if (box) {
+      box.innerHTML = `<div class="empty-note">'${escapeHtml(query)}' 와(과) 일치하는 ${escapeHtml(src.short)} 기록이 없습니다.</div>`;
+    }
+    return;
+  }
+
+  if (box) {
+    const returned = state.match.filter(isReturned).length;
+    box.innerHTML = `<div class="crew-recall">
+      <span>'${escapeHtml(query)}' · ${state.match.length}건${returned ? ` · 반송 ${returned}건` : ""}</span>
+      <button class="crew-recall-btn" data-mail-go="${kind}">조회 창 다시 열기</button>
+    </div>`;
+  }
+  state.row = null;
+  refreshMailModal(kind);
+}
+
+els.content.addEventListener("input", (e) => {
+  const kind = e.target.dataset && e.target.dataset.mailSearch;
+  if (kind) MAIL_STATE[kind].query = e.target.value;
+});
+
+els.content.addEventListener("keydown", (e) => {
+  const kind = e.target.dataset && e.target.dataset.mailSearch;
+  if (kind && e.key === "Enter") {
+    e.preventDefault();
+    openMailModal(kind);
+  }
+});
+
+els.content.addEventListener("click", (e) => {
+  const go = e.target.closest("[data-mail-go]");
+  if (go) {
+    openMailModal(go.dataset.mailGo);
+    return;
+  }
+  const tab = e.target.closest("[data-mail-month]");
+  if (tab) {
+    const kind = tab.dataset.mailMonth;
+    MAIL_STATE[kind].month = tab.dataset.month;
+    const box = document.getElementById(`mailBox-${kind}`);
+    if (box) box.innerHTML = mailMonthPanel(kind);
+  }
+});
+
+els.modalBody.addEventListener("click", (e) => {
+  if (!MAIL_MODAL_KIND) return;
+  const kind = MAIL_MODAL_KIND;
+  if (e.target.closest("[data-mail-back]")) {
+    MAIL_STATE[kind].row = null;
+    refreshMailModal(kind);
+    return;
+  }
+  const row = e.target.closest("tr[data-table]");
+  if (row) {
+    MAIL_STATE[kind].row = Number(row.dataset.row);
+    refreshMailModal(kind);
+  }
+});
+
+/* 한 대장(우편물 또는 인쇄물)의 화면 한 덩어리 */
+function mailSection(kind) {
+  const src = MAIL_SOURCES[kind];
+  return `
+    <h2 class="section-title">${escapeHtml(src.label)}</h2>
+
+    <div class="crew-panel">
+      <h3 class="section-title" style="font-size:15px;">${escapeHtml(src.short)} 크루별 조회</h3>
+      <p class="section-note">이름으로 찾으면 최신 기록부터 별도 창에 모아 보여줍니다.</p>
+
+      <div class="search-bar">
+        <input type="search" id="mailSearch-${kind}" data-mail-search="${kind}"
+               placeholder="한글 이름 또는 영문 닉네임 (예: 곽보길 / Charles)" autocomplete="off" />
+        <button class="crew-search-btn" data-mail-go="${kind}">조회</button>
+      </div>
+
+      <div class="crew-result-box" id="mailResult-${kind}">
+        <div class="empty-note">이름을 입력하고 조회를 누르면, 그 크루의 ${escapeHtml(src.short)} 기록을 최신순으로 볼 수 있습니다.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>${escapeHtml(src.short)} 월별 기록</h2>
+        <span class="panel-meta">달을 선택하면 그 달 기록 전체가 나옵니다</span>
+      </div>
+      <div class="panel-body" id="mailBox-${kind}">${mailMonthPanel(kind)}</div>
+    </div>
+  `;
+}
+
 function renderMail() {
-  const mail = getRecords("mail_log");
-  const namecard = getRecords("namecard");
+  // 다른 화면의 검색 상태가 남아 팝업이 헷갈리지 않도록 초기화합니다.
+  CREW_TAB = null;
+  MAIL_MODAL_KIND = null;
+  Object.keys(MAIL_STATE).forEach((k) => {
+    MAIL_STATE[k].query = "";
+    MAIL_STATE[k].match = [];
+    MAIL_STATE[k].row = null;
+  });
+
+  const now = new Date();
+  const thisKey = monthKey(now);
+  const monthLabel = `${now.getFullYear()}년 ${now.getMonth() + 1}월`;
+
+  const post = mailRecords("post");
+  const print = mailRecords("print");
+  const postNow = post.filter((r) => r.date && monthKey(r.date) === thisKey);
+  const printNow = print.filter((r) => r.date && monthKey(r.date) === thisKey);
+  const returnedNow = postNow.filter((r) => isReturned(r.raw)).length;
+  const printQty = printNow.reduce(
+    (s, r) => s + (Number(String(pick(r.raw, "개수")).replace(/,/g, "")) || 0), 0
+  );
+
+  const returnAlert = returnedNow
+    ? `<div class="alert-panel">
+        <div class="alert-head">
+          <span class="alert-icon" aria-hidden="true">!</span>
+          <strong>이번 달 반송 ${returnedNow}건</strong>
+          <span class="alert-note">아래 표에서 붉게 표시된 행입니다.</span>
+        </div>
+      </div>`
+    : "";
+
   return `
     <div class="kpi-grid">
-      ${kpiCard("등기/택배/우편물", mail.length + "건")}
-      ${kpiCard("명함/네임플레이트", namecard.length + "건")}
+      ${kpiCard("이번 달 우편물", postNow.length + "건", monthLabel + " 도달일 기준")}
+      ${kpiCard("이번 달 반송", returnedNow + "건", "전달/반송여부 기준")}
+      ${kpiCard("이번 달 인쇄물", printNow.length + "건", monthLabel + " 전달일 기준")}
+      ${kpiCard("인쇄물 수량", printQty.toLocaleString() + "개", "이번 달 합계")}
+      ${kpiCard("전체 기록", (post.length + print.length).toLocaleString() + "건", "우편물 + 인쇄물 누적")}
     </div>
-    <div class="panel">
-      <div class="panel-header"><h2>우편물 불출 기록</h2><span class="panel-meta">${mail.length}건</span></div>
-      <div class="panel-body">${renderTable(mail.slice().reverse(), null, { detailTitle: "우편물 상세" })}</div>
-    </div>
-    <div class="panel">
-      <div class="panel-header"><h2>명함 · 네임플레이트 관리</h2><span class="panel-meta">${namecard.length}건</span></div>
-      <div class="panel-body">${renderTable(namecard, null, { detailTitle: "명함 상세" })}</div>
-    </div>
+
+    ${returnAlert}
+
+    ${mailSection("post")}
+
+    <div style="height:14px;"></div>
+
+    ${mailSection("print")}
   `;
 }
 
@@ -1622,6 +1924,7 @@ function renderAnnual() {
   const somopum = getRecords("somopum");
   const vehicleLog = getRecords("vehicle_log");
   const mail = getRecords("mail_log");
+  const namecard = getRecords("namecard");
 
   return `
     <div class="kpi-grid">
@@ -1633,7 +1936,7 @@ function renderAnnual() {
       )}
       ${kpiCard("소모품", somopum.length + "건", "전체 누적")}
       ${kpiCard("법인차량", vehicleLog.length + "건", "전체 누적")}
-      ${kpiCard("우편물", mail.length + "건", "전체 누적")}
+      ${kpiCard("메일룸", (mail.length + namecard.length).toLocaleString() + "건", "우편물 + 인쇄물 누적")}
     </div>
 
     <div class="panel">
@@ -1656,8 +1959,18 @@ function renderAnnual() {
       </div>
     </div>
 
+    <div class="panel">
+      <div class="panel-header">
+        <h2>우편물 월별 추이</h2>
+        <span class="panel-meta">도달일 기준</span>
+      </div>
+      <div class="panel-body">
+        ${trendAreaChart(monthlyCounts(mailRecords("post")), "건")}
+      </div>
+    </div>
+
     <div class="empty-note" style="text-align:left; padding: 4px 4px 0;">
-      탕비실 · 법인차량 · 우편물의 월별 그래프는 각 시트의 날짜 열 이름을 확인한 뒤 추가할 예정이에요.
+      탕비실 · 법인차량의 월별 그래프는 각 시트의 날짜 열 이름을 확인한 뒤 추가할 예정이에요.
     </div>
   `;
 }
