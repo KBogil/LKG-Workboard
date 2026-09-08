@@ -52,7 +52,8 @@ jobs:
           set -e
           mkdir -p _site/data
           cp index.html app.js style.css _site/
-          [ -f intro.jpg ] && cp intro.jpg _site/ || echo "intro.jpg 없음 (인트로 화면 생략)"
+          for f in intro.png intro.jpg; do [ -f "$f" ] && cp "$f" _site/; done
+          ls _site/intro.* 2>/dev/null || echo "인트로 이미지 없음 (로고 없이 표시됩니다)"
           cp data/workboard.json _site/data/
           echo "배포 대상:"
           ls -lhR _site
