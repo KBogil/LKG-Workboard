@@ -298,16 +298,36 @@ function statusCellHtml(value) {
   return `<span class="badge ${done ? "done" : "warn"}">${escapeHtml(text)}</span>`;
 }
 
+/* 열 이름 비교용으로 단순화합니다.
+   시트 헤더에 메모 표시나 이모지, 줄바꿈이 섞여 있어도 같은 열로 보게 하려는 것입니다.
+   예: "🟧 업무내용" 과 "업무내용" 을 같은 열로 취급 */
+function normalizeColumn(name) {
+  return String(name).replace(/[^0-9A-Za-z가-힣()]/g, "").toLowerCase();
+}
+
 function renderTable(records, columns, opts) {
   const options = opts || {};
   if (!records.length) {
     return `<div class="empty-note">${escapeHtml(options.emptyText || "표시할 데이터가 없습니다.")}</div>`;
   }
 
-  // 지정된 열 중 데이터에 실제로 있는 것만 씁니다.
-  const available = new Set();
-  records.forEach((r) => Object.keys(r).forEach((k) => available.add(k)));
-  const cols = (columns || [...available]).filter((c) => c && c.trim() && available.has(c));
+  // 데이터에 실제로 있는 열 이름을 모읍니다.
+  const available = [];
+  const seen = new Set();
+  records.forEach((r) =>
+    Object.keys(r).forEach((k) => {
+      if (k && k.trim() && !seen.has(k)) {
+        seen.add(k);
+        available.push(k);
+      }
+    })
+  );
+
+  // 보고 싶은 열 이름을 실제 열 이름에 느슨하게 맞춥니다.
+  const byNormalized = new Map(available.map((k) => [normalizeColumn(k), k]));
+  const cols = columns
+    ? columns.map((c) => byNormalized.get(normalizeColumn(c))).filter(Boolean)
+    : available;
   if (!cols.length) return `<div class="empty-note">표시할 열이 없습니다.</div>`;
 
   const clickable = options.clickable !== false;
@@ -343,7 +363,8 @@ function renderTable(records, columns, opts) {
     ? `<div class="table-hint">행을 누르면 전체 내용을 볼 수 있습니다.</div>`
     : "";
 
-  return `${hint}<div class="table-scroll"><table class="data-table"><thead>${thead}</thead><tbody>${body}</tbody></table></div>`;
+  const centerClass = options.center ? " center-all" : "";
+  return `${hint}<div class="table-scroll"><table class="data-table${centerClass}"><thead>${thead}</thead><tbody>${body}</tbody></table></div>`;
 }
 
 /* 표의 행을 눌렀을 때 팝업을 띄웁니다 (화면을 새로 그려도 계속 동작하도록 위임 처리). */
@@ -478,7 +499,7 @@ function renderOverview() {
       <div class="panel-body">
         ${renderTable(jeonsan.slice(-10).reverse(),
           ["유형","요청자","부서","자산번호","업무내용","담당자","완료일자","진행상태"],
-          { detailTitle: "전산 업무 상세" })}
+          { detailTitle: "전산 업무 상세", center: true })}
       </div>
     </div>
   `;
@@ -594,7 +615,7 @@ function crewMatches(query) {
 function renderCrewResult() {
   const query = CREW_QUERY.trim();
   if (!query) {
-    return `<div class="empty-note">크루 이름이나 닉네임을 입력하면 어느 대장에 몇 건이 있는지 먼저 보여드립니다.</div>`;
+    return `<div class="empty-note">이름을 입력하면 어느 대장에 기록이 있는지 보여드립니다.</div>`;
   }
 
   const groups = crewMatches(query);
@@ -607,14 +628,9 @@ function renderCrewResult() {
   const done = status.rows.filter((r) => /완료/.test(String(r["진행상태"] ?? ""))).length;
   const pending = status.rows.length - done;
 
-  // 아직 안 골랐으면 기록이 있는 첫 카테고리를 기본으로 엽니다.
-  const selectable = groups.filter((g) => g.rows.length);
-  const activeKey = selectable.some((g) => g.key === CREW_TAB) ? CREW_TAB : selectable[0].key;
-  const active = groups.find((g) => g.key === activeKey);
-
   const tabs = groups
     .map(
-      (g) => `<button class="crew-tab ${g.key === activeKey ? "active" : ""}"
+      (g) => `<button class="crew-tab ${g.key === CREW_TAB ? "active" : ""}"
         data-crew-tab="${g.key}" ${g.rows.length ? "" : "disabled"}>
         <div class="crew-tab-label">${escapeHtml(g.label)}</div>
         <div class="crew-tab-count">${g.rows.length}건</div>
@@ -622,6 +638,23 @@ function renderCrewResult() {
       </button>`
     )
     .join("");
+
+  // 카테고리를 아직 안 골랐으면 상세 표는 띄우지 않습니다.
+  const active = groups.find((g) => g.key === CREW_TAB && g.rows.length);
+  const detail = active
+    ? `<div class="crew-step">3단계 · ${escapeHtml(active.label)} 상세</div>
+       <div class="panel">
+         <div class="panel-header">
+           <h2>${escapeHtml(active.label)}</h2>
+           <span class="panel-meta">${escapeHtml(query)} · ${active.rows.length}건</span>
+         </div>
+         <div class="panel-body">${renderTable(active.rows, active.columns, {
+           detailTitle: active.detailTitle,
+           center: true,
+           emptyText: "기록이 없습니다.",
+         })}</div>
+       </div>`
+    : `<div class="empty-note">위에서 보고 싶은 대장을 선택하세요.</div>`;
 
   return `
     <div class="kpi-grid">
@@ -640,18 +673,10 @@ function renderCrewResult() {
         </div>`
       : `<div class="ok-panel">대기중인 전산 업무가 없습니다.</div>`}
 
+    <div class="crew-step">2단계 · 어느 대장을 볼까요?</div>
     <div class="crew-tabs">${tabs}</div>
 
-    <div class="panel">
-      <div class="panel-header">
-        <h2>${escapeHtml(active.label)}</h2>
-        <span class="panel-meta">${escapeHtml(query)} · ${active.rows.length}건</span>
-      </div>
-      <div class="panel-body">${renderTable(active.rows, active.columns, {
-        detailTitle: active.detailTitle,
-        emptyText: "기록이 없습니다.",
-      })}</div>
-    </div>
+    ${detail}
   `;
 }
 
@@ -668,11 +693,11 @@ els.content.addEventListener("input", (e) => {
   refreshCrewResult();
 });
 
-/* 카테고리 버튼을 누르면 그 대장의 상세 표만 보여줍니다. */
+/* 카테고리 버튼을 누르면 그 대장의 상세 표만 펼칩니다. 다시 누르면 접힙니다. */
 els.content.addEventListener("click", (e) => {
   const tab = e.target.closest("[data-crew-tab]");
   if (!tab || tab.disabled) return;
-  CREW_TAB = tab.dataset.crewTab;
+  CREW_TAB = CREW_TAB === tab.dataset.crewTab ? null : tab.dataset.crewTab;
   refreshCrewResult();
 });
 
@@ -683,9 +708,6 @@ function renderJeonsan() {
 
   const doneCount = status.filter((r) => (r["진행상태"] || "").includes("완료")).length;
   const ingCount = status.length - doneCount;
-
-  const byDept = countBy(asset, "부서").slice(0, 4);
-  const maxDept = byDept.length ? byDept[0][1] : 0;
 
   HANDLER_STATS = handlerMonthlyStats(status);
   const people = Object.entries(HANDLER_STATS).sort((a, b) => b[1].total - a[1].total);
@@ -711,20 +733,16 @@ function renderJeonsan() {
       }
     </div>
 
-    <h2 class="section-title">크루별 조회</h2>
-    <p class="section-note">이름이나 닉네임을 입력하면 어느 대장에 몇 건이 있는지 보여드립니다. 카테고리를 누르면 그 내용만 펼쳐집니다.</p>
-    <div class="search-bar">
-      <input type="search" id="crewSearch" placeholder="한글 이름 또는 영문 닉네임 (예: 이재환 / Jetty)" autocomplete="off" />
-    </div>
-    <div id="crewResult">${renderCrewResult()}</div>
+    <div class="crew-panel">
+      <h2 class="section-title">크루별 조회</h2>
+      <p class="section-note">아래 세 표는 그대로 두고, 이 안에서만 크루별로 찾아봅니다.</p>
 
-    <h2 class="section-title">부서별 자산 보유</h2>
-    <div class="rank-grid">
-      ${
-        byDept.length
-          ? byDept.map(([name, count]) => rankCard(name, count, maxDept, "보유 자산")).join("")
-          : `<div class="empty-note">부서 데이터가 없습니다.</div>`
-      }
+      <div class="crew-step">1단계 · 크루 이름 입력</div>
+      <div class="search-bar">
+        <input type="search" id="crewSearch" placeholder="한글 이름 또는 영문 닉네임 (예: 이재환 / Jetty)" autocomplete="off" />
+      </div>
+
+      <div class="crew-result-box" id="crewResult">${renderCrewResult()}</div>
     </div>
 
     <div class="panel">
@@ -732,18 +750,18 @@ function renderJeonsan() {
       <div class="panel-body">
         ${renderTable(status.slice().reverse(),
           ["유형","요청자","부서","자산번호","업무내용","조치사항","담당자","요청일자","착수일자","완료일자","진행상태","비고"],
-          { detailTitle: "전산 업무 상세" })}
+          { detailTitle: "전산 업무 상세", center: true })}
       </div>
     </div>
 
     <div class="panel">
       <div class="panel-header"><h2>자산 지급대장</h2><span class="panel-meta">${asset.length}건</span></div>
-      <div class="panel-body">${renderTable(asset, null, { detailTitle: "자산 지급 상세" })}</div>
+      <div class="panel-body">${renderTable(asset, null, { detailTitle: "자산 지급 상세", center: true })}</div>
     </div>
 
     <div class="panel">
       <div class="panel-header"><h2>입출고 · 대여 로그</h2><span class="panel-meta">${io.length}건</span></div>
-      <div class="panel-body">${renderTable(io.slice().reverse(), null, { detailTitle: "입출고 상세" })}</div>
+      <div class="panel-body">${renderTable(io.slice().reverse(), null, { detailTitle: "입출고 상세", center: true })}</div>
     </div>
   `;
 }
