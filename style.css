@@ -1449,3 +1449,28 @@ table.data-table.center-all td {
   border-radius: 2px;
   display: inline-block;
 }
+
+/* ---------- 메일룸: 반송 강조 ---------- */
+/* 반송 건은 목록에서 바로 눈에 띄어야 해서, 배지 색을 채우고
+   행 배경과 왼쪽 띠까지 같이 줍니다 (색맹이어도 글자와 띠로 구분됩니다). */
+.badge.danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+table.data-table tbody tr.row-alert td {
+  background: #FDF4F1;
+}
+
+table.data-table tbody tr.row-alert td:first-child {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+table.data-table tbody tr.row-alert:hover td {
+  background: #FAE9E3;
+}
+
+/* 메일룸 안 소제목 (우편물 / 인쇄물) */
+.crew-panel h3.section-title {
+  margin-bottom: 4px;
+}
