@@ -239,9 +239,11 @@ function parsePerson(label) {
 /* "2026. 9. 1" 같은 날짜 문자열을 Date 객체로 변환. 형식이 안 맞으면 null. */
 function parseKDate(str) {
   if (!str) return null;
-  const m = String(str).trim().match(/^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})/);
+  const m = String(str).trim().match(/^(\d{2,4})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})/);
   if (!m) return null;
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  let year = Number(m[1]);
+  if (year < 100) year += 2000; // "26. 09. 01" -> 2026년
+  return new Date(year, Number(m[2]) - 1, Number(m[3]));
 }
 
 function monthKey(date) {
@@ -305,6 +307,18 @@ function normalizeColumn(name) {
   return String(name).replace(/[^0-9A-Za-z가-힣()]/g, "").toLowerCase();
 }
 
+/* 시트 열 이름이 "불출 대상\n(한글명(영문명)_소속팀명)" 처럼 길고 줄바꿈까지 섞여 있어서,
+   기호를 무시하고 이름이 들어간 열을 찾아 값을 꺼냅니다. */
+function pick(record, ...names) {
+  const keys = Object.keys(record);
+  for (const want of names) {
+    const target = normalizeColumn(want);
+    const hit = keys.find((k) => normalizeColumn(k).includes(target));
+    if (hit) return record[hit];
+  }
+  return "";
+}
+
 function renderTable(records, columns, opts) {
   const options = opts || {};
   if (!records.length) {
@@ -325,9 +339,15 @@ function renderTable(records, columns, opts) {
 
   // 보고 싶은 열 이름을 실제 열 이름에 느슨하게 맞춥니다.
   const byNormalized = new Map(available.map((k) => [normalizeColumn(k), k]));
-  const cols = columns
-    ? columns.map((c) => byNormalized.get(normalizeColumn(c))).filter(Boolean)
-    : available;
+  const findColumn = (want) => {
+    const target = normalizeColumn(want);
+    return (
+      byNormalized.get(target) ||
+      available.find((k) => normalizeColumn(k).startsWith(target)) ||
+      available.find((k) => normalizeColumn(k).includes(target))
+    );
+  };
+  const cols = columns ? columns.map(findColumn).filter(Boolean) : available;
   if (!cols.length) return `<div class="empty-note">표시할 열이 없습니다.</div>`;
 
   const clickable = options.clickable !== false;
@@ -416,7 +436,7 @@ function renderView(view) {
     overview: renderOverview,
     jeonsan: renderJeonsan,
     tangbisil: renderTangbisil,
-    somopum: () => renderGeneric("소모품 현황", "somopum"),
+    somopum: renderSomopum,
     vehicle: renderVehicle,
     mail: renderMail,
     annual: renderAnnual,
@@ -601,104 +621,137 @@ function matchesCrew(record, needle, nameFields) {
 }
 
 let CREW_QUERY = "";
-let CREW_TAB = null; // 선택된 카테고리 key. null이면 아직 안 고름
+let CREW_TAB = null;  // 팝업에서 고른 대장. null이면 아직 안 고름
+let CREW_ROW = null;  // 팝업 표에서 펼쳐 본 행 번호
 
 function crewMatches(query) {
   const needle = query.trim().toLowerCase();
-  if (!needle) return null;
+  if (!needle) return [];
   return CREW_SOURCES.map((source) => ({
     ...source,
     rows: getRecords(source.key).filter((r) => matchesCrew(r, needle, source.nameFields)),
   }));
 }
 
-function renderCrewResult() {
+/* 팝업 안에 그릴 내용. 세 단계를 상황에 따라 바꿔 보여줍니다.
+   ① 대장 고르기 → ② 그 대장의 표 → ③ 행 하나의 전체 내용 */
+function crewModalBody() {
   const query = CREW_QUERY.trim();
-  if (!query) {
-    return `<div class="empty-note">이름을 입력하면 어느 대장에 기록이 있는지 보여드립니다.</div>`;
+  const found = crewMatches(query).filter((g) => g.rows.length);
+
+  if (!found.length) {
+    return `<div class="empty-note">'${escapeHtml(query)}' 와(과) 일치하는 기록이 없습니다.</div>`;
   }
 
-  const groups = crewMatches(query);
-  const total = groups.reduce((sum, g) => sum + g.rows.length, 0);
-  if (!total) {
-    return `<div class="empty-note">'${escapeHtml(query)}' 와(과) 일치하는 기록이 없습니다. 한글 이름이나 영문 닉네임으로 찾아보세요.</div>`;
+  const active = found.find((g) => g.key === CREW_TAB);
+
+  // ③ 행 상세
+  if (active && CREW_ROW !== null && active.rows[CREW_ROW]) {
+    return `<button class="modal-back" data-crew-back>◀ ${escapeHtml(active.label)} 목록으로</button>
+      ${recordDetailHtml(active.rows[CREW_ROW])}`;
   }
 
-  const status = groups.find((g) => g.key === "jeonsan_status");
-  const done = status.rows.filter((r) => /완료/.test(String(r["진행상태"] ?? ""))).length;
-  const pending = status.rows.length - done;
+  // ② 선택한 대장의 표
+  if (active) {
+    const backLabel = found.length > 1 ? "◀ 다른 대장 선택" : "◀ 처음으로";
+    return `<button class="modal-back" data-crew-back>${backLabel}</button>
+      <div class="modal-sub">${escapeHtml(active.label)} · ${active.rows.length}건</div>
+      ${renderTable(active.rows, active.columns, {
+        detailTitle: active.detailTitle,
+        center: true,
+        emptyText: "기록이 없습니다.",
+      })}`;
+  }
 
-  const tabs = groups
+  // ① 기록이 있는 대장만 골라서 보여줍니다
+  const picks = found
     .map(
-      (g) => `<button class="crew-tab ${g.key === CREW_TAB ? "active" : ""}"
-        data-crew-tab="${g.key}" ${g.rows.length ? "" : "disabled"}>
-        <div class="crew-tab-label">${escapeHtml(g.label)}</div>
-        <div class="crew-tab-count">${g.rows.length}건</div>
-        <div class="crew-tab-sub">${g.rows.length ? "눌러서 상세 보기" : "기록 없음"}</div>
+      (g) => `<button class="crew-pick" data-crew-tab="${g.key}">
+        <span class="crew-pick-label">${escapeHtml(g.label)}</span>
+        <span class="crew-pick-count">${g.rows.length}건</span>
+        <span class="crew-pick-arrow" aria-hidden="true">›</span>
       </button>`
     )
     .join("");
 
-  // 카테고리를 아직 안 골랐으면 상세 표는 띄우지 않습니다.
-  const active = groups.find((g) => g.key === CREW_TAB && g.rows.length);
-  const detail = active
-    ? `<div class="crew-step">3단계 · ${escapeHtml(active.label)} 상세</div>
-       <div class="panel">
-         <div class="panel-header">
-           <h2>${escapeHtml(active.label)}</h2>
-           <span class="panel-meta">${escapeHtml(query)} · ${active.rows.length}건</span>
-         </div>
-         <div class="panel-body">${renderTable(active.rows, active.columns, {
-           detailTitle: active.detailTitle,
-           center: true,
-           emptyText: "기록이 없습니다.",
-         })}</div>
-       </div>`
-    : `<div class="empty-note">위에서 보고 싶은 대장을 선택하세요.</div>`;
-
-  return `
-    <div class="kpi-grid">
-      ${kpiCard("검색 결과", total + "건", `'${escapeHtml(query)}' 관련 전체`)}
-      ${kpiCard("진행중 · 대기", pending + "건", "전산 업무 중 미완료")}
-      ${kpiCard("완료", done + "건", "전산 업무 중 완료")}
-    </div>
-
-    ${pending > 0
-      ? `<div class="alert-panel">
-          <div class="alert-head">
-            <span class="alert-icon" aria-hidden="true">!</span>
-            <strong>대기중인 전산 업무 ${pending}건</strong>
-            <span class="alert-note">아직 완료 처리되지 않은 건입니다.</span>
-          </div>
-        </div>`
-      : `<div class="ok-panel">대기중인 전산 업무가 없습니다.</div>`}
-
-    <div class="crew-step">2단계 · 어느 대장을 볼까요?</div>
-    <div class="crew-tabs">${tabs}</div>
-
-    ${detail}
-  `;
+  return `<p class="modal-note">기록이 있는 대장입니다. 보고 싶은 대장을 선택하세요.</p>
+    <div class="crew-picks">${picks}</div>`;
 }
 
-function refreshCrewResult() {
+/* 표를 보여줄 때만 팝업을 넓게 씁니다. */
+function refreshCrewModal() {
+  const query = CREW_QUERY.trim();
+  const modal = document.querySelector(".modal");
+  const wide = CREW_TAB !== null && CREW_ROW === null;
+  if (modal) modal.classList.toggle("modal-wide", wide);
+  openModal(`${query} · 크루 조회`, crewModalBody());
+}
+
+function openCrewModal() {
+  const query = CREW_QUERY.trim();
   const box = document.getElementById("crewResult");
-  if (box) box.innerHTML = renderCrewResult();
+  if (!query) {
+    if (box) box.innerHTML = `<div class="empty-note">조회할 크루 이름을 입력해주세요.</div>`;
+    return;
+  }
+  const found = crewMatches(query).filter((g) => g.rows.length);
+  if (!found.length) {
+    if (box) {
+      box.innerHTML = `<div class="empty-note">'${escapeHtml(query)}' 와(과) 일치하는 기록이 없습니다. 한글 이름이나 영문 닉네임으로 찾아보세요.</div>`;
+    }
+    return;
+  }
+  if (box) {
+    const total = found.reduce((sum, g) => sum + g.rows.length, 0);
+    box.innerHTML = `<div class="crew-recall">
+      <span>'${escapeHtml(query)}' · ${total}건 조회됨</span>
+      <button class="crew-recall-btn" id="crewReopen">조회 창 다시 열기</button>
+    </div>`;
+  }
+  CREW_TAB = null;
+  CREW_ROW = null;
+  refreshCrewModal();
 }
 
-/* 검색창에 글자를 칠 때마다 결과 영역만 다시 그립니다 (입력칸 포커스 유지). */
+/* 검색어를 기억해 둡니다. 팝업은 조회 버튼이나 Enter를 눌렀을 때만 엽니다. */
 els.content.addEventListener("input", (e) => {
   if (e.target.id !== "crewSearch") return;
   CREW_QUERY = e.target.value;
-  CREW_TAB = null; // 검색어가 바뀌면 카테고리 선택은 초기화
-  refreshCrewResult();
 });
 
-/* 카테고리 버튼을 누르면 그 대장의 상세 표만 펼칩니다. 다시 누르면 접힙니다. */
+els.content.addEventListener("keydown", (e) => {
+  if (e.target.id === "crewSearch" && e.key === "Enter") {
+    e.preventDefault();
+    openCrewModal();
+  }
+});
+
 els.content.addEventListener("click", (e) => {
-  const tab = e.target.closest("[data-crew-tab]");
-  if (!tab || tab.disabled) return;
-  CREW_TAB = CREW_TAB === tab.dataset.crewTab ? null : tab.dataset.crewTab;
-  refreshCrewResult();
+  if (e.target.closest("#crewSearchBtn") || e.target.closest("#crewReopen")) {
+    openCrewModal();
+  }
+});
+
+/* 팝업 안에서의 이동: 대장 선택 / 행 펼치기 / 뒤로 가기 */
+els.modalBody.addEventListener("click", (e) => {
+  if (e.target.closest("[data-crew-back]")) {
+    if (CREW_ROW !== null) CREW_ROW = null;
+    else CREW_TAB = null;
+    refreshCrewModal();
+    return;
+  }
+  const pick = e.target.closest("[data-crew-tab]");
+  if (pick) {
+    CREW_TAB = pick.dataset.crewTab;
+    CREW_ROW = null;
+    refreshCrewModal();
+    return;
+  }
+  const row = e.target.closest("tr[data-table]");
+  if (row && CREW_TAB !== null) {
+    CREW_ROW = Number(row.dataset.row);
+    refreshCrewModal();
+  }
 });
 
 function renderJeonsan() {
@@ -714,6 +767,7 @@ function renderJeonsan() {
 
   CREW_QUERY = "";
   CREW_TAB = null;
+  CREW_ROW = null;
 
   return `
     <div class="kpi-grid">
@@ -735,14 +789,16 @@ function renderJeonsan() {
 
     <div class="crew-panel">
       <h2 class="section-title">크루별 조회</h2>
-      <p class="section-note">아래 세 표는 그대로 두고, 이 안에서만 크루별로 찾아봅니다.</p>
+      <p class="section-note">아래 세 표는 그대로 두고, 별도 창에서 크루별 기록만 따로 찾아봅니다.</p>
 
-      <div class="crew-step">1단계 · 크루 이름 입력</div>
       <div class="search-bar">
         <input type="search" id="crewSearch" placeholder="한글 이름 또는 영문 닉네임 (예: 이재환 / Jetty)" autocomplete="off" />
+        <button class="crew-search-btn" id="crewSearchBtn">조회</button>
       </div>
 
-      <div class="crew-result-box" id="crewResult">${renderCrewResult()}</div>
+      <div class="crew-result-box" id="crewResult">
+        <div class="empty-note">이름을 입력하고 조회를 누르면, 기록이 있는 대장을 별도 창에서 골라볼 수 있습니다.</div>
+      </div>
     </div>
 
     <div class="panel">
@@ -916,6 +972,363 @@ function stockTable(items) {
   </table></div>`;
 }
 
+/* ---------------- 소모품 ---------------- */
+
+/* "김예림(Rimmy)_정보보안팀/휴직" -> 이름 / 닉네임 / 소속 */
+function parseTarget(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return { label: "", name: "", nick: "", team: "" };
+  const cut = text.indexOf("_");
+  const who = cut === -1 ? text : text.slice(0, cut);
+  const team = cut === -1 ? "" : text.slice(cut + 1);
+  const m = who.match(/^(.*?)\s*\(([^()]*)\)\s*$/);
+  return {
+    label: text,
+    name: (m ? m[1] : who).trim(),
+    nick: (m ? m[2] : "").trim(),
+    team: team.trim(),
+  };
+}
+
+/* 불출 대장 한 줄을 다루기 쉬운 형태로 바꿉니다. */
+function somopumRows() {
+  return getRecords("somopum")
+    .map((r) => ({
+      raw: r,
+      date: parseKDate(pick(r, "날짜")),
+      item: String(pick(r, "품목") || "").trim(),
+      qty: Number(String(pick(r, "수량")).replace(/,/g, "")) || 0,
+      target: parseTarget(pick(r, "불출 대상")),
+      issued: /true|y|완료|✓/i.test(String(pick(r, "불출 여부"))),
+    }))
+    .filter((x) => x.item);
+}
+
+function somopumStock() {
+  const s = getObject("somopum_stock");
+  return s && Array.isArray(s.months) ? s : { months: [], latest: null };
+}
+
+function numText(v) {
+  if (v === null || v === undefined || v === "") return "-";
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString() : String(v);
+}
+
+/* 같은 기준으로 묶어 수량과 건수를 더합니다. */
+function sumBy(rows, keyFn) {
+  const map = new Map();
+  rows.forEach((r) => {
+    const k = keyFn(r);
+    if (!k) return;
+    const cur = map.get(k) || { key: k, qty: 0, count: 0 };
+    cur.qty += r.qty;
+    cur.count += 1;
+    map.set(k, cur);
+  });
+  return [...map.values()].sort((a, b) => b.qty - a.qty || b.count - a.count);
+}
+
+/* 순위 막대. 색만으로 읽히지 않도록 숫자를 항상 같이 적습니다. */
+function rankBars(entries, unit) {
+  if (!entries.length) return `<div class="empty-note">집계할 자료가 없습니다.</div>`;
+  const max = Math.max(...entries.map((e) => e.qty), 1);
+  return `<div class="bar-chart rank-chart">${entries
+    .map(
+      (e, i) => `<div class="bar-row">
+        <div class="bar-label" title="${escapeHtml(e.key)}"><span class="bar-rank">${i + 1}</span>${escapeHtml(e.key)}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${Math.round((e.qty / max) * 100)}%"></div></div>
+        <div class="bar-count">${e.qty.toLocaleString()}${unit} · ${e.count}건</div>
+      </div>`
+    )
+    .join("")}</div>`;
+}
+
+/* --- 월별 잔여 재고 --- */
+let SOM_MONTH = null;
+
+function somStockPanel() {
+  const stock = somopumStock();
+  if (!stock.months.length) {
+    return `<div class="empty-note">월별 재고 자료를 아직 불러오지 못했습니다. (시트의 '월별 불출량&amp;검수' 탭을 읽는 중일 수 있습니다)</div>`;
+  }
+  if (!stock.months.some((m) => m.label === SOM_MONTH)) {
+    SOM_MONTH = stock.latest || stock.months[stock.months.length - 1].label;
+  }
+  const cur = stock.months.find((m) => m.label === SOM_MONTH);
+
+  const tabs = stock.months
+    .map(
+      (m) => `<button class="month-tab ${m.label === SOM_MONTH ? "active" : ""}"
+        data-som-month="${escapeHtml(m.label)}">${escapeHtml(m.label)}</button>`
+    )
+    .join("");
+
+  const items = cur.items;
+  const totalRemain = items.reduce(
+    (s, i) => s + (Number(i["잔여재고"] ?? i["재고수량"]) || 0), 0
+  );
+
+  const body = items.length
+    ? `<div class="table-scroll"><table class="data-table center-all">
+        <thead><tr>
+          <th>품목</th><th class="num">잔여 재고</th><th class="num">실물 재고</th>
+          <th class="num">상시 재고수량</th><th class="num">입고 수량</th><th class="num">불출량</th>
+        </tr></thead>
+        <tbody>${items
+          .map(
+            (i) => `<tr>
+              <td class="cell-strong">${escapeHtml(i["품목"])}</td>
+              <td class="num">${numText(i["잔여재고"])}</td>
+              <td class="num">${numText(i["실물재고"])}</td>
+              <td class="num">${numText(i["재고수량"])}</td>
+              <td class="num">${numText(i["입고수량"])}</td>
+              <td class="num">${numText(i["불출량"] ?? i["검수불출량"])}</td>
+            </tr>`
+          )
+          .join("")}</tbody>
+      </table></div>`
+    : `<div class="empty-note">${escapeHtml(cur.label)}에 기록된 품목이 없습니다.</div>`;
+
+  return `<div class="month-tabs">${tabs}</div>
+    <div class="month-summary">${escapeHtml(cur.label)} · 품목 ${items.length}종 · 잔여 재고 합계 ${totalRemain.toLocaleString()}개</div>
+    ${body}`;
+}
+
+/* --- 크루별 불출 조회 (별도 팝업) --- */
+let SOM_QUERY = "";
+let SOM_ROW = null;
+let SOM_MATCH = [];
+
+function somModalBody() {
+  const rows = SOM_MATCH;
+  if (!rows.length) return `<div class="empty-note">기록이 없습니다.</div>`;
+
+  if (SOM_ROW !== null && rows[SOM_ROW]) {
+    return `<button class="modal-back" data-som-back>◀ 목록으로</button>
+      ${recordDetailHtml(rows[SOM_ROW].raw)}`;
+  }
+
+  const byItem = sumBy(rows, (r) => r.item);
+  const totalQty = rows.reduce((s, r) => s + r.qty, 0);
+  const pending = rows.filter((r) => !r.issued).length;
+  const who = [...new Set(rows.map((r) => r.target.label))].slice(0, 4).join(", ");
+
+  const summary = `<div class="table-scroll"><table class="data-table center-all">
+      <thead><tr><th>소모품 종류</th><th class="num">총 수량</th><th class="num">불출 횟수</th></tr></thead>
+      <tbody>${byItem
+        .map(
+          (e) => `<tr><td class="cell-strong">${escapeHtml(e.key)}</td>
+            <td class="num">${e.qty.toLocaleString()}</td><td class="num">${e.count}</td></tr>`
+        )
+        .join("")}</tbody>
+    </table></div>`;
+
+  const log = `<div class="table-scroll"><table class="data-table center-all">
+      <thead><tr><th>날짜</th><th>품목</th><th class="num">수량</th><th>불출 대상</th><th>불출 여부</th></tr></thead>
+      <tbody>${rows
+        .map(
+          (r, i) => `<tr class="row-clickable" data-som-row="${i}">
+            <td>${escapeHtml(pick(r.raw, "날짜") || "-")}</td>
+            <td title="${escapeHtml(r.item)}">${escapeHtml(r.item)}</td>
+            <td class="num">${r.qty}</td>
+            <td title="${escapeHtml(r.target.label)}">${escapeHtml(r.target.label || "-")}</td>
+            <td>${r.issued ? '<span class="badge done">불출 완료</span>' : '<span class="badge warn">대기</span>'}</td>
+          </tr>`
+        )
+        .join("")}</tbody>
+    </table></div>`;
+
+  return `<p class="modal-note">${escapeHtml(who)} · 총 ${rows.length}건 / ${totalQty.toLocaleString()}개${
+    pending ? ` · <strong>미불출 ${pending}건</strong>` : ""
+  }</p>
+    <div class="modal-sub">소모품 종류별 합계</div>
+    ${summary}
+    <div class="modal-sub" style="margin-top:22px;">전체 불출 내역 (행을 누르면 상세)</div>
+    ${log}`;
+}
+
+function refreshSomModal() {
+  const modal = document.querySelector(".modal");
+  if (modal) modal.classList.toggle("modal-wide", SOM_ROW === null);
+  openModal(`${SOM_QUERY.trim()} · 소모품 불출 내역`, somModalBody());
+}
+
+function openSomModal() {
+  const query = SOM_QUERY.trim();
+  const box = document.getElementById("somResult");
+  if (!query) {
+    if (box) box.innerHTML = `<div class="empty-note">조회할 크루 이름을 입력해주세요.</div>`;
+    return;
+  }
+  const needle = query.toLowerCase();
+  SOM_MATCH = somopumRows().filter((r) => r.target.label.toLowerCase().includes(needle));
+  if (!SOM_MATCH.length) {
+    if (box) {
+      box.innerHTML = `<div class="empty-note">'${escapeHtml(query)}' 에게 불출된 기록이 없습니다. 한글 이름이나 영문 닉네임으로 찾아보세요.</div>`;
+    }
+    return;
+  }
+  if (box) {
+    const qty = SOM_MATCH.reduce((s, r) => s + r.qty, 0);
+    box.innerHTML = `<div class="crew-recall">
+      <span>'${escapeHtml(query)}' · ${SOM_MATCH.length}건 / ${qty.toLocaleString()}개</span>
+      <button class="crew-recall-btn" id="somReopen">조회 창 다시 열기</button>
+    </div>`;
+  }
+  SOM_ROW = null;
+  refreshSomModal();
+}
+
+els.content.addEventListener("input", (e) => {
+  if (e.target.id === "somSearch") SOM_QUERY = e.target.value;
+});
+
+els.content.addEventListener("keydown", (e) => {
+  if (e.target.id === "somSearch" && e.key === "Enter") {
+    e.preventDefault();
+    openSomModal();
+  }
+});
+
+els.content.addEventListener("click", (e) => {
+  if (e.target.closest("#somSearchBtn") || e.target.closest("#somReopen")) {
+    openSomModal();
+    return;
+  }
+  const monthBtn = e.target.closest("[data-som-month]");
+  if (monthBtn) {
+    SOM_MONTH = monthBtn.dataset.somMonth;
+    const box = document.getElementById("somStockBox");
+    if (box) box.innerHTML = somStockPanel();
+  }
+});
+
+els.modalBody.addEventListener("click", (e) => {
+  if (e.target.closest("[data-som-back]")) {
+    SOM_ROW = null;
+    refreshSomModal();
+    return;
+  }
+  const row = e.target.closest("tr[data-som-row]");
+  if (row) {
+    SOM_ROW = Number(row.dataset.somRow);
+    refreshSomModal();
+  }
+});
+
+function renderSomopum() {
+  const rows = somopumRows();
+  const stock = somopumStock();
+  SOM_QUERY = "";
+  SOM_ROW = null;
+  SOM_MATCH = [];
+  CREW_TAB = null;
+
+  const now = new Date();
+  const monthLabel = `${now.getFullYear()}년 ${now.getMonth() + 1}월`;
+  const thisMonth = rows.filter((r) => isSameMonth(r.date, now));
+  const thisQty = thisMonth.reduce((s, r) => s + r.qty, 0);
+  const pending = rows.filter((r) => !r.issued).length;
+
+  const latest = stock.months.length ? stock.months[stock.months.length - 1] : null;
+  const remainTotal = latest
+    ? latest.items.reduce((s, i) => s + (Number(i["잔여재고"] ?? i["재고수량"]) || 0), 0)
+    : 0;
+
+  // 월별 불출량 추이
+  const byMonth = new Map();
+  rows.forEach((r) => {
+    if (!r.date) return;
+    const k = monthKey(r.date);
+    byMonth.set(k, (byMonth.get(k) || 0) + r.qty);
+  });
+  const monthEntries = [...byMonth.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  const monthMax = Math.max(...monthEntries.map(([, v]) => v), 1);
+  const monthChart = monthEntries.length
+    ? `<div class="bar-chart">${monthEntries
+        .map(
+          ([label, qty]) => `<div class="bar-row">
+            <div class="bar-label">${label}</div>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.round((qty / monthMax) * 100)}%"></div></div>
+            <div class="bar-count">${qty.toLocaleString()}개</div>
+          </div>`
+        )
+        .join("")}</div>`
+    : `<div class="empty-note">날짜를 읽을 수 있는 기록이 없습니다.</div>`;
+
+  return `
+    <div class="kpi-grid">
+      ${kpiCard("이번 달 불출", thisMonth.length + "건", monthLabel + " 기준")}
+      ${kpiCard("이번 달 불출 수량", thisQty.toLocaleString() + "개", "전 품목 합계")}
+      ${kpiCard("미불출 대기", pending + "건", "불출 여부 미체크")}
+      ${kpiCard("관리 품목", (latest ? latest.items.length : 0) + "종", latest ? latest.label + " 재고 조사" : "재고 자료 없음")}
+      ${kpiCard("잔여 재고 합계", remainTotal.toLocaleString() + "개", latest ? latest.label + " 기준" : "-")}
+    </div>
+
+    <div class="crew-panel">
+      <h2 class="section-title">크루별 불출 조회</h2>
+      <p class="section-note">크루 이름으로 찾으면, 그 크루에게 나간 소모품 종류와 수량을 별도 창에서 보여줍니다.</p>
+
+      <div class="search-bar">
+        <input type="search" id="somSearch" placeholder="한글 이름 또는 영문 닉네임 (예: 김예림 / Rimmy)" autocomplete="off" />
+        <button class="crew-search-btn" id="somSearchBtn">조회</button>
+      </div>
+
+      <div class="crew-result-box" id="somResult">
+        <div class="empty-note">이름을 입력하고 조회를 누르면, 불출된 품목과 수량을 별도 창에서 볼 수 있습니다.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>월별 잔여 재고</h2>
+        <span class="panel-meta">월을 선택하세요</span>
+      </div>
+      <div class="panel-body" id="somStockBox">${somStockPanel()}</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>많이 나가는 품목 순위</h2>
+        <span class="panel-meta">전체 누적 · 상위 12</span>
+      </div>
+      <div class="panel-body">${rankBars(sumBy(rows, (r) => r.item).slice(0, 12), "개")}</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>많이 요청하는 크루 순위</h2>
+        <span class="panel-meta">전체 누적 · 상위 12</span>
+      </div>
+      <div class="panel-body">${rankBars(
+        sumBy(rows, (r) => (r.target.nick ? `${r.target.name}(${r.target.nick})` : r.target.name)).slice(0, 12),
+        "개"
+      )}</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>월별 불출량 추이</h2>
+        <span class="panel-meta">불출 대장 날짜 기준</span>
+      </div>
+      <div class="panel-body">${monthChart}</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>불출 대장</h2>
+        <span class="panel-meta">${rows.length}건</span>
+      </div>
+      <div class="panel-body">
+        ${renderTable(getRecords("somopum").slice().reverse(),
+          ["날짜","품목","수량","불출 대상","물품 전달 구역","불출 여부","비고(특이사항)"],
+          { detailTitle: "소모품 불출 상세", center: true })}
+      </div>
+    </div>
+  `;
+}
+
 /* ---------------- 나머지 화면 ---------------- */
 
 function renderGeneric(title, key) {
@@ -1025,8 +1438,18 @@ function renderAnnual() {
       </div>
     </div>
 
+    <div class="panel">
+      <div class="panel-header">
+        <h2>소모품 불출 월별 추이</h2>
+        <span class="panel-meta">불출 대장 날짜 기준</span>
+      </div>
+      <div class="panel-body">
+        ${monthBarChart(somopum, "날짜")}
+      </div>
+    </div>
+
     <div class="empty-note" style="text-align:left; padding: 4px 4px 0;">
-      탕비실 · 소모품 · 법인차량 · 우편물의 월별 그래프는 각 시트의 날짜 열 이름을 확인한 뒤 추가할 예정이에요.
+      탕비실 · 법인차량 · 우편물의 월별 그래프는 각 시트의 날짜 열 이름을 확인한 뒤 추가할 예정이에요.
     </div>
   `;
 }
