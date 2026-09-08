@@ -408,26 +408,60 @@ def build_tangbisil_data(spreadsheet_id, access_token, meta):
 
 # ---------------------------------------------------------------- 일반 시트
 
+# 구글 시트의 수식 오류 값들. 값이 아니라 오류이므로 빈 칸으로 취급합니다.
+SHEET_ERRORS = {"#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NAME?", "#NULL!",
+                "#NUM!", "#ERROR!", "#SPILL!", "#CALC!"}
+
+HEADER_SEARCH_ROWS = 12  # 헤더는 아무리 늦어도 이 안에 있다고 봅니다
+
+
+def clean_cell(value):
+    """셀 값을 정리합니다. 수식 오류는 빈 문자열로 바꿉니다."""
+    text = str(value).strip()
+    return "" if text in SHEET_ERRORS else text
+
+
+def find_header_row(rows):
+    """헤더 행을 찾습니다.
+
+    첫 번째 '내용 있는 행'을 헤더로 쓰면, 시트 위쪽에 안내 문구(병합된 빨간 글씨 등)가
+    있는 경우 그것을 열 이름으로 잘못 잡습니다. 헤더는 보통 칸이 촘촘히 채워져 있으므로,
+    앞쪽 몇 행 중 '채워진 칸이 가장 많은 행'을 헤더로 봅니다.
+    """
+    best_idx, best_count = None, 0
+    for idx, row in enumerate(rows[:HEADER_SEARCH_ROWS]):
+        count = sum(1 for c in row if clean_cell(c))
+        if count > best_count:
+            best_idx, best_count = idx, count
+    return best_idx
+
+
 def rows_to_records(rows):
-    """완전히 빈 선행 행은 건너뛰고, 실제 내용이 있는 첫 행을 헤더(열 이름)로 보고
-    나머지 행을 {열이름: 값} 형태로 변환합니다."""
+    """시트를 {열이름: 값} 목록으로 변환합니다.
+
+    - 안내 문구 행을 헤더로 잘못 잡지 않도록 가장 촘촘한 행을 헤더로 씁니다.
+    - 이름이 없는 열은 버립니다.
+    - 수식 오류(#REF! 등)만 남은 행이나 완전히 빈 행은 버립니다.
+      (시트 아래쪽에 수식만 늘어서 있는 수천 개의 빈 행이 그대로 딸려오는 것을 막습니다)
+    """
     if not rows:
         return []
 
-    header_idx = 0
-    while header_idx < len(rows) and not any(str(c).strip() for c in rows[header_idx]):
-        header_idx += 1
-    if header_idx >= len(rows):
+    header_idx = find_header_row(rows)
+    if header_idx is None:
         return []
 
-    header = rows[header_idx]
+    header = [clean_cell(c) for c in rows[header_idx]]
+    named = [(i, name) for i, name in enumerate(header) if name]
+    if not named:
+        return []
+
     records = []
     for row in rows[header_idx + 1:]:
-        if not any(str(c).strip() for c in row):
-            continue
-        records.append({
-            name: (row[i] if i < len(row) else "") for i, name in enumerate(header)
-        })
+        record = {name: clean_cell(row[i]) if i < len(row) else "" for i, name in named}
+        if not any(record.values()):
+            continue  # 내용이 하나도 없는 행 (오류만 있던 행 포함)
+        records.append(record)
     return records
 
 
