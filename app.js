@@ -1,5 +1,5 @@
 /* LKG Workboard - app.js
-   암호화된 data/workboard.json 을 불러와서, 핀번호 입력 후 복호화하여
+   암호화된 data/workboard.json 을 불러와서, 비밀번호 입력 후 복호화하여
    사이드바 카테고리별 화면을 그립니다. */
 
 const DATA_URL = "./data/workboard.json";
@@ -18,6 +18,10 @@ const els = {
   pinInput: document.getElementById("pinInput"),
   pinSubmit: document.getElementById("pinSubmit"),
   lockError: document.getElementById("lockError"),
+  modalBackdrop: document.getElementById("modalBackdrop"),
+  modalTitle: document.getElementById("modalTitle"),
+  modalBody: document.getElementById("modalBody"),
+  modalClose: document.getElementById("modalClose"),
 };
 
 let ENCRYPTED_BLOB = null;
@@ -105,69 +109,13 @@ els.navItems.forEach((btn) => {
   });
 });
 
-/* ---------------- 시작 인트로 화면 ---------------- */
-
-const INTRO_MIN_MS = 1900;   // 이미지가 떠 있는 최소 시간
-const INTRO_MAX_MS = 6000;   // 이미지가 안 떠도 이 시간이 지나면 무조건 넘어감
-const INTRO_FADE_MS = 500;   // 사라지는 데 걸리는 시간
-
-let INTRO_DONE = false;
-let DATA_READY = false;
-
-/* 인트로가 끝났고 데이터도 준비됐을 때만 핀 입력칸에 커서를 놓습니다. */
-function focusPinIfReady() {
-  if (INTRO_DONE && DATA_READY) els.pinInput.focus();
-}
-
-function setupIntro() {
-  const overlay = document.getElementById("introOverlay");
-  const img = document.getElementById("introImg");
-  if (!overlay || !img) {
-    INTRO_DONE = true;
-    return;
-  }
-
-  const startedAt = Date.now();
-  let dismissed = false;
-
-  function dismiss(immediately) {
-    if (dismissed) return;
-    const shown = Date.now() - startedAt;
-    // 이미지가 너무 빨리 떠도 최소 시간만큼은 보여줍니다 (깜빡이는 느낌 방지).
-    if (!immediately && shown < INTRO_MIN_MS) {
-      setTimeout(() => dismiss(true), INTRO_MIN_MS - shown);
-      return;
-    }
-    dismissed = true;
-    overlay.classList.add("hide");
-    setTimeout(() => {
-      overlay.remove();
-      INTRO_DONE = true;
-      focusPinIfReady();
-    }, INTRO_FADE_MS);
-  }
-
-  if (img.complete && img.naturalWidth) {
-    dismiss(false);
-  } else {
-    img.addEventListener("load", () => dismiss(false));
-    img.addEventListener("error", () => dismiss(true)); // 이미지가 없으면 그냥 넘어감
-  }
-
-  setTimeout(() => dismiss(true), INTRO_MAX_MS);
-  overlay.addEventListener("click", () => dismiss(true));
-  window.addEventListener("keydown", () => dismiss(true), { once: true });
-}
-
 async function init() {
-  setupIntro();
   try {
     const res = await fetch(DATA_URL, { cache: "no-store" });
     if (!res.ok) throw new Error("데이터를 불러오지 못했습니다.");
     ENCRYPTED_BLOB = await res.json();
     els.pinInput.disabled = false;
-    DATA_READY = true;
-    focusPinIfReady();
+    els.pinInput.focus();
   } catch (err) {
     els.lockError.textContent = "데이터 파일을 불러오지 못했습니다. (" + err.message + ")";
   }
@@ -183,6 +131,46 @@ function formatDateTime(iso) {
   const hh = String(kst.getUTCHours()).padStart(2, "0");
   const mm = String(kst.getUTCMinutes()).padStart(2, "0");
   return `${y}.${m}.${day} ${hh}:${mm}`;
+}
+
+/* ---------------- 상세 팝업 ---------------- */
+
+function openModal(title, bodyHtml) {
+  els.modalTitle.textContent = title;
+  els.modalBody.innerHTML = bodyHtml;
+  els.modalBackdrop.hidden = false;
+  document.body.classList.add("modal-open");
+  els.modalClose.focus();
+}
+
+function closeModal() {
+  els.modalBackdrop.hidden = true;
+  els.modalBody.innerHTML = "";
+  document.body.classList.remove("modal-open");
+}
+
+els.modalClose.addEventListener("click", closeModal);
+els.modalBackdrop.addEventListener("click", (e) => {
+  // 팝업 바깥(어두운 배경)을 눌렀을 때만 닫습니다.
+  if (e.target === els.modalBackdrop) closeModal();
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !els.modalBackdrop.hidden) closeModal();
+});
+
+/* 레코드 하나를 "항목: 값" 목록으로 펼쳐 보여줍니다. */
+function recordDetailHtml(record) {
+  const rows = Object.entries(record)
+    .filter(([k]) => k && k.trim())
+    .map(([k, v]) => {
+      const value = v === null || v === undefined || v === "" ? "-" : String(v);
+      return `<div class="detail-row">
+        <div class="detail-key">${escapeHtml(k)}</div>
+        <div class="detail-value">${escapeHtml(value)}</div>
+      </div>`;
+    })
+    .join("");
+  return `<div class="detail-list">${rows}</div>`;
 }
 
 /* ---------------- 공용 유틸 ---------------- */
@@ -225,18 +213,27 @@ function countBy(records, field) {
 }
 
 /* "이재환(Jetty) 정성훈(Martin)" 처럼 담당자 셀 하나에 여러 명이 들어있는 경우,
-   "이름(영문)" 단위로 쪼개서 각각 따로 집계합니다. */
+   "이름(영문)" 단위로 쪼갭니다. */
+function splitNames(raw) {
+  const text = (raw || "").trim();
+  if (!text) return [];
+  return text.match(/[^\s,\/、]+\([^()]*\)/g) || [text];
+}
+
 function countByMultiName(records, field) {
   const map = {};
   records.forEach((r) => {
-    const raw = (r[field] || "").trim();
-    if (!raw) return;
-    const names = raw.match(/[^\s,\/、]+\([^()]*\)/g) || [raw];
-    names.forEach((n) => {
+    splitNames(r[field]).forEach((n) => {
       map[n] = (map[n] || 0) + 1;
     });
   });
   return Object.entries(map).sort((a, b) => b[1] - a[1]);
+}
+
+/* "이재환(Jetty)" -> { name: "이재환", nick: "Jetty" } */
+function parsePerson(label) {
+  const m = String(label).match(/^(.*?)\s*\(([^()]*)\)\s*$/);
+  return m ? { name: m[1].trim(), nick: m[2].trim() } : { name: String(label).trim(), nick: "" };
 }
 
 /* "2026. 9. 1" 같은 날짜 문자열을 Date 객체로 변환. 형식이 안 맞으면 null. */
@@ -245,6 +242,10 @@ function parseKDate(str) {
   const m = String(str).trim().match(/^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})/);
   if (!m) return null;
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+function monthKey(date) {
+  return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function isSameMonth(d, ref) {
@@ -270,26 +271,92 @@ function filterCurrentMonthGeneric(records) {
   return records.filter((r) => isSameMonth(parseKDate(r[field]), now));
 }
 
-function renderTable(records, columns) {
-  if (!records.length) {
-    return `<div class="empty-note">표시할 데이터가 없습니다.</div>`;
-  }
-  const cols = columns || Object.keys(records[0]).filter((c) => c !== "");
-  let thead = "<tr>" + cols.map((c) => `<th>${escapeHtml(c)}</th>`).join("") + "</tr>";
-  let rows = records
-    .map((r) => {
-      return "<tr>" + cols.map((c) => `<td>${escapeHtml(r[c] ?? "")}</td>`).join("") + "</tr>";
-    })
-    .join("");
-  return `<div class="table-scroll"><table class="data-table"><thead>${thead}</thead><tbody>${rows}</tbody></table></div>`;
-}
-
 function escapeHtml(v) {
   return String(v)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
+
+/* ---------------- 표 ---------------- */
+
+/* 표에 그려진 행을 다시 찾아갈 수 있도록 보관합니다.
+   화면을 새로 그릴 때마다 비웁니다. */
+let TABLE_REGISTRY = {};
+let TABLE_SEQ = 0;
+
+function isNumericColumn(name) {
+  return /수량|건수|개수|사용량|입고량|재고|금액|개입/.test(name);
+}
+
+/* 진행상태 같은 열은 배지로 그려서 눈에 잘 띄게 합니다. */
+function statusCellHtml(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "-";
+  const done = /완료|정상|반납|지급/.test(text);
+  return `<span class="badge ${done ? "done" : "warn"}">${escapeHtml(text)}</span>`;
+}
+
+function renderTable(records, columns, opts) {
+  const options = opts || {};
+  if (!records.length) {
+    return `<div class="empty-note">${escapeHtml(options.emptyText || "표시할 데이터가 없습니다.")}</div>`;
+  }
+
+  // 지정된 열 중 데이터에 실제로 있는 것만 씁니다.
+  const available = new Set();
+  records.forEach((r) => Object.keys(r).forEach((k) => available.add(k)));
+  const cols = (columns || [...available]).filter((c) => c && c.trim() && available.has(c));
+  if (!cols.length) return `<div class="empty-note">표시할 열이 없습니다.</div>`;
+
+  const clickable = options.clickable !== false;
+  const tableId = "tbl" + ++TABLE_SEQ;
+  if (clickable) {
+    TABLE_REGISTRY[tableId] = { records, title: options.detailTitle || "상세 내용" };
+  }
+
+  const thead =
+    "<tr>" +
+    cols
+      .map((c) => `<th class="${isNumericColumn(c) ? "num" : ""}">${escapeHtml(c)}</th>`)
+      .join("") +
+    "</tr>";
+
+  const body = records
+    .map((r, i) => {
+      const cells = cols
+        .map((c) => {
+          const raw = r[c] ?? "";
+          if (/상태/.test(c)) return `<td>${statusCellHtml(raw)}</td>`;
+          const text = raw === "" ? "-" : String(raw);
+          // title 속성을 넣어두면 잘린 내용도 마우스를 올려 확인할 수 있습니다.
+          return `<td class="${isNumericColumn(c) ? "num" : ""}" title="${escapeHtml(text)}">${escapeHtml(text)}</td>`;
+        })
+        .join("");
+      const attrs = clickable ? ` class="row-clickable" data-table="${tableId}" data-row="${i}"` : "";
+      return `<tr${attrs}>${cells}</tr>`;
+    })
+    .join("");
+
+  const hint = clickable
+    ? `<div class="table-hint">행을 누르면 전체 내용을 볼 수 있습니다.</div>`
+    : "";
+
+  return `${hint}<div class="table-scroll"><table class="data-table"><thead>${thead}</thead><tbody>${body}</tbody></table></div>`;
+}
+
+/* 표의 행을 눌렀을 때 팝업을 띄웁니다 (화면을 새로 그려도 계속 동작하도록 위임 처리). */
+els.content.addEventListener("click", (e) => {
+  const row = e.target.closest("tr[data-table]");
+  if (!row) return;
+  const source = TABLE_REGISTRY[row.dataset.table];
+  if (!source) return;
+  const record = source.records[Number(row.dataset.row)];
+  if (record) openModal(source.title, recordDetailHtml(record));
+});
+
+/* ---------------- 카드 ---------------- */
 
 function kpiCard(label, value, sub) {
   return `<div class="kpi-card">
@@ -333,6 +400,8 @@ function renderView(view) {
     mail: renderMail,
     annual: renderAnnual,
   };
+  TABLE_REGISTRY = {}; // 이전 화면의 표 정보는 버립니다
+  closeModal();
   const fn = renderers[view] || renderOverview;
   els.content.innerHTML = fn();
 }
@@ -369,9 +438,7 @@ function renderOverview() {
       ${kpiCard(
         "탕비실 진열",
         `${tangbisil.workdays_done} / ${tangbisil.workdays_total}일`,
-        tangbisil.workdays_total
-          ? `${monthLabel} 근무일 기준 진행`
-          : "일자별 진행 기록 없음"
+        tangbisil.workdays_total ? `${monthLabel} 근무일 기준 진행` : "일자별 진행 기록 없음"
       )}
       ${
         somopum === null
@@ -396,9 +463,7 @@ function renderOverview() {
       ${ownerCard(
         "탕비실",
         "박동국(Kaju)",
-        tangbisil.workdays_total
-          ? `${tangbisil.workdays_done} / ${tangbisil.workdays_total}일`
-          : "-"
+        tangbisil.workdays_total ? `${tangbisil.workdays_done} / ${tangbisil.workdays_total}일` : "-"
       )}
       ${ownerCard("소모품", "박동국(Kaju)", (somopum === null ? somopumAll : somopum).length + "건")}
       ${ownerCard("법인차량", "박동국(Kaju)", (vehicleLog === null ? vehicleLogAll : vehicleLog).length + "건")}
@@ -411,11 +476,145 @@ function renderOverview() {
         <span class="panel-meta">${monthLabel} 기준</span>
       </div>
       <div class="panel-body">
-        ${renderTable(jeonsan.slice(-10).reverse(), ["유형","요청자","부서","자산번호","업무내용","담당자","완료일자","진행상태"])}
+        ${renderTable(jeonsan.slice(-10).reverse(),
+          ["유형","요청자","부서","자산번호","업무내용","담당자","완료일자","진행상태"],
+          { detailTitle: "전산 업무 상세" })}
       </div>
     </div>
   `;
 }
+
+/* ---------------- 전산 ---------------- */
+
+/* 담당자별 월별 처리 건수. { "이재환(Jetty)": { total, months: {"2026.09": 12, ...} } } */
+function handlerMonthlyStats(records) {
+  const stats = {};
+  records.forEach((r) => {
+    const date = parseKDate(r["요청일자"]) || parseKDate(r["완료일자"]);
+    splitNames(r["담당자"]).forEach((person) => {
+      if (!stats[person]) stats[person] = { total: 0, months: {}, records: [] };
+      stats[person].total += 1;
+      stats[person].records.push(r);
+      const key = date ? monthKey(date) : "날짜 없음";
+      stats[person].months[key] = (stats[person].months[key] || 0) + 1;
+    });
+  });
+  return stats;
+}
+
+let HANDLER_STATS = {};
+
+function personCard(label, stat) {
+  const person = parsePerson(label);
+  return `<button class="person-card" data-person="${escapeHtml(label)}">
+    <div class="person-name">${escapeHtml(person.name)}</div>
+    <div class="person-nick">${escapeHtml(person.nick || "-")}</div>
+    <div class="person-hint">월별 보기</div>
+  </button>`;
+}
+
+/* 담당자 카드를 누르면 월별 처리 건수를 팝업으로 보여줍니다. */
+els.content.addEventListener("click", (e) => {
+  const card = e.target.closest(".person-card");
+  if (!card) return;
+  const label = card.dataset.person;
+  const stat = HANDLER_STATS[label];
+  if (!stat) return;
+
+  const entries = Object.entries(stat.months).sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  const max = Math.max(...entries.map(([, c]) => c), 1);
+  const person = parsePerson(label);
+
+  const rows = entries
+    .map(
+      ([month, count]) => `
+      <div class="bar-row">
+        <div class="bar-label">${escapeHtml(month)}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${Math.round((count / max) * 100)}%"></div></div>
+        <div class="bar-count">${count}건</div>
+      </div>`
+    )
+    .join("");
+
+  openModal(
+    `${person.name}${person.nick ? ` (${person.nick})` : ""} · 월별 처리 건수`,
+    `<div class="modal-kpi">${kpiCard("전체 누적", stat.total + "건")}${kpiCard("집계된 개월 수", entries.length + "개월")}</div>
+     <div class="bar-chart">${rows}</div>`
+  );
+});
+
+/* 크루 이름으로 세 대장을 한 번에 훑습니다. 열 이름을 몰라도 되도록 모든 값에서 찾습니다. */
+function matchesCrew(record, keyword) {
+  const needle = keyword.trim().toLowerCase();
+  if (!needle) return false;
+  return Object.values(record).some((v) =>
+    String(v ?? "").toLowerCase().includes(needle)
+  );
+}
+
+function renderCrewResult(keyword) {
+  const query = (keyword || "").trim();
+  if (!query) {
+    return `<div class="empty-note">크루 이름이나 닉네임을 입력하면 업무현황 · 자산 지급대장 · 입출고 기록을 한 번에 모아서 보여드립니다.</div>`;
+  }
+
+  const status = getRecords("jeonsan_status").filter((r) => matchesCrew(r, query));
+  const asset = getRecords("jeonsan_asset").filter((r) => matchesCrew(r, query));
+  const io = getRecords("jeonsan_io").filter((r) => matchesCrew(r, query));
+  const total = status.length + asset.length + io.length;
+
+  if (!total) {
+    return `<div class="empty-note">'${escapeHtml(query)}' 와(과) 일치하는 기록이 없습니다.</div>`;
+  }
+
+  const done = status.filter((r) => /완료/.test(String(r["진행상태"] ?? ""))).length;
+  const pending = status.length - done;
+
+  return `
+    <div class="kpi-grid">
+      ${kpiCard("검색 결과", total + "건", `'${escapeHtml(query)}' 관련 전체`)}
+      ${kpiCard("전산 업무", status.length + "건", `완료 ${done} · 대기 ${pending}`)}
+      ${kpiCard("보유 자산", asset.length + "건", "자산 지급대장 기준")}
+      ${kpiCard("입출고 · 대여", io.length + "건", "입출고 로그 기준")}
+    </div>
+
+    ${pending > 0
+      ? `<div class="alert-panel">
+          <div class="alert-head">
+            <span class="alert-icon" aria-hidden="true">!</span>
+            <strong>대기중인 전산 업무 ${pending}건</strong>
+            <span class="alert-note">아직 완료 처리되지 않은 건입니다.</span>
+          </div>
+        </div>`
+      : `<div class="ok-panel">대기중인 전산 업무가 없습니다.</div>`}
+
+    <div class="panel">
+      <div class="panel-header"><h2>전산 업무현황</h2><span class="panel-meta">${status.length}건</span></div>
+      <div class="panel-body">${renderTable(status,
+        ["유형","요청자","부서","자산번호","업무내용","담당자","요청일자","완료일자","진행상태"],
+        { detailTitle: "전산 업무 상세", emptyText: "관련 업무 기록이 없습니다." })}</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header"><h2>자산 지급대장</h2><span class="panel-meta">${asset.length}건</span></div>
+      <div class="panel-body">${renderTable(asset, null,
+        { detailTitle: "자산 지급 상세", emptyText: "지급된 자산 기록이 없습니다." })}</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header"><h2>입출고 · 대여</h2><span class="panel-meta">${io.length}건</span></div>
+      <div class="panel-body">${renderTable(io, null,
+        { detailTitle: "입출고 상세", emptyText: "입출고 기록이 없습니다." })}</div>
+    </div>
+  `;
+}
+
+/* 검색창에 글자를 칠 때마다 결과 영역만 다시 그립니다 (입력칸 포커스 유지). */
+els.content.addEventListener("input", (e) => {
+  if (e.target.id !== "crewSearch") return;
+  const box = document.getElementById("crewResult");
+  if (box) box.innerHTML = renderCrewResult(e.target.value);
+});
 
 function renderJeonsan() {
   const status = getRecords("jeonsan_status");
@@ -428,8 +627,8 @@ function renderJeonsan() {
   const byDept = countBy(asset, "부서").slice(0, 4);
   const maxDept = byDept.length ? byDept[0][1] : 0;
 
-  const byHandler = countByMultiName(status, "담당자").slice(0, 6);
-  const maxHandler = byHandler.length ? byHandler[0][1] : 0;
+  HANDLER_STATS = handlerMonthlyStats(status);
+  const people = Object.entries(HANDLER_STATS).sort((a, b) => b[1].total - a[1].total);
 
   return `
     <div class="kpi-grid">
@@ -439,20 +638,28 @@ function renderJeonsan() {
       ${kpiCard("자산 지급대장 건수", asset.length + "건")}
     </div>
 
-    <h2 class="section-title">담당자별 처리 건수 (전체 누적)</h2>
-    <div class="rank-grid">
+    <h2 class="section-title">담당자</h2>
+    <p class="section-note">이름을 누르면 월별 처리 건수를 볼 수 있습니다.</p>
+    <div class="person-grid">
       ${
-        byHandler.length
-          ? byHandler.map(([name, count]) => rankCard(name, count, maxHandler)).join("")
+        people.length
+          ? people.map(([label, stat]) => personCard(label, stat)).join("")
           : `<div class="empty-note">담당자 데이터가 없습니다.</div>`
       }
     </div>
+
+    <h2 class="section-title">크루별 조회</h2>
+    <p class="section-note">이름이나 닉네임을 입력하면 업무현황 · 자산 지급대장 · 입출고 기록을 한 번에 모아 보여줍니다.</p>
+    <div class="search-bar">
+      <input type="search" id="crewSearch" placeholder="예: 이재환 또는 Jetty" autocomplete="off" />
+    </div>
+    <div id="crewResult">${renderCrewResult("")}</div>
 
     <h2 class="section-title">부서별 자산 보유</h2>
     <div class="rank-grid">
       ${
         byDept.length
-          ? byDept.map(([name, count]) => rankCard(name, count, maxDept)).join("")
+          ? byDept.map(([name, count]) => rankCard(name, count, maxDept, "보유 자산")).join("")
           : `<div class="empty-note">부서 데이터가 없습니다.</div>`
       }
     </div>
@@ -460,22 +667,20 @@ function renderJeonsan() {
     <div class="panel">
       <div class="panel-header"><h2>업무현황 로그</h2><span class="panel-meta">${status.length}건</span></div>
       <div class="panel-body">
-        ${renderTable(status.slice().reverse(), ["유형","요청자","부서","자산번호","업무내용","조치사항","담당자","요청일자","완료일자","진행상태","비고"])}
+        ${renderTable(status.slice().reverse(),
+          ["유형","요청자","부서","자산번호","업무내용","조치사항","담당자","요청일자","완료일자","진행상태","비고"],
+          { detailTitle: "전산 업무 상세" })}
       </div>
     </div>
 
     <div class="panel">
       <div class="panel-header"><h2>자산 지급대장</h2><span class="panel-meta">${asset.length}건</span></div>
-      <div class="panel-body">
-        ${renderTable(asset)}
-      </div>
+      <div class="panel-body">${renderTable(asset, null, { detailTitle: "자산 지급 상세" })}</div>
     </div>
 
     <div class="panel">
       <div class="panel-header"><h2>입출고 · 대여 로그</h2><span class="panel-meta">${io.length}건</span></div>
-      <div class="panel-body">
-        ${renderTable(io.slice().reverse())}
-      </div>
+      <div class="panel-body">${renderTable(io.slice().reverse(), null, { detailTitle: "입출고 상세" })}</div>
     </div>
   `;
 }
@@ -500,9 +705,7 @@ function usageChangeChart(items) {
       const delta = item["사용량증감"];
       const up = delta > 0;
       const width = (Math.abs(delta) / max) * 50;
-      const bar = up
-        ? `left:50%; width:${width}%;`
-        : `left:${50 - width}%; width:${width}%;`;
+      const bar = up ? `left:50%; width:${width}%;` : `left:${50 - width}%; width:${width}%;`;
       return `<div class="div-row">
         <div class="div-label" title="${escapeHtml(item["상품명"])}">${escapeHtml(item["상품명"])}</div>
         <div class="div-track">
@@ -570,54 +773,69 @@ function renderTangbisil() {
 
     <div class="panel">
       <div class="panel-header">
-        <h2>전월 대비 사용량 증감</h2>
-        <span class="panel-meta">${escapeHtml(tb.prev_month_title || "전월 자료 없음")} 대비</span>
-      </div>
-      <div class="panel-body">${usageChangeChart(items)}</div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-header">
         <h2>재고 현황</h2>
         <span class="panel-meta">${items.length}종</span>
       </div>
       <div class="panel-body">${stockTable(items)}</div>
     </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>전월 대비 사용량 증감</h2>
+        <span class="panel-meta">${escapeHtml(tb.prev_month_title || "전월 자료 없음")} 대비</span>
+      </div>
+      <div class="panel-body">${usageChangeChart(items)}</div>
+    </div>
   `;
 }
 
-/* 재고 표. 발주 필요 행은 배지를 붙여 색 없이도 구분되게 합니다. */
+/* 재고 표. 발주 필요 행은 배지와 배경으로 색 없이도 구분되게 합니다. */
 function stockTable(items) {
   if (!items.length) {
     return `<div class="empty-note">탕비실 데이터를 불러오지 못했습니다.</div>`;
   }
-  const head = ["상품명", "박스당 개입수", "사용량", "입고량", "잔여 재고", "전월 재고", "전월 대비", "상태"];
+  const head = [
+    { label: "상품명", num: false },
+    { label: "박스당 개입수", num: true },
+    { label: "사용량", num: true },
+    { label: "입고량", num: true },
+    { label: "잔여 재고", num: true },
+    { label: "전월 재고", num: true },
+    { label: "전월 대비", num: true },
+    { label: "상태", num: false },
+  ];
   const rows = items
     .map((i) => {
       const delta = i["사용량증감"];
       const deltaText =
         typeof delta === "number" ? (delta > 0 ? `+${delta}` : String(delta)) : "-";
-      const deltaClass = typeof delta === "number" && delta !== 0 ? (delta > 0 ? "up" : "down") : "";
-      const badge = i["발주필요"]
+      const deltaClass =
+        typeof delta === "number" && delta !== 0 ? (delta > 0 ? "up" : "down") : "";
+      const need = i["발주필요"];
+      const badge = need
         ? `<span class="badge warn">발주 필요</span>`
         : `<span class="badge done">정상</span>`;
-      return `<tr>
-        <td>${escapeHtml(i["상품명"])}</td>
-        <td>${escapeHtml(i["박스당개입수"] ?? "")}</td>
-        <td>${escapeHtml(i["사용량"] ?? "")}</td>
-        <td>${escapeHtml(i["입고량"] ?? "")}</td>
-        <td>${escapeHtml(i["현재고"] ?? "")}</td>
-        <td>${escapeHtml(i["전월재고"] ?? "")}</td>
-        <td class="delta ${deltaClass}">${deltaText}</td>
+      return `<tr class="${need ? "row-alert" : ""}">
+        <td class="cell-strong" title="${escapeHtml(i["상품명"])}">${escapeHtml(i["상품명"])}</td>
+        <td class="num">${escapeHtml(i["박스당개입수"] ?? "-")}</td>
+        <td class="num">${escapeHtml(i["사용량"] ?? "-")}</td>
+        <td class="num">${escapeHtml(i["입고량"] ?? "-")}</td>
+        <td class="num cell-stock ${need ? "danger" : ""}">${escapeHtml(i["현재고"] ?? "-")}</td>
+        <td class="num muted">${escapeHtml(i["전월재고"] ?? "-")}</td>
+        <td class="num delta ${deltaClass}">${deltaText}</td>
         <td>${badge}</td>
       </tr>`;
     })
     .join("");
-  return `<div class="table-scroll"><table class="data-table">
-    <thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+  return `<div class="table-scroll"><table class="data-table stock-table">
+    <thead><tr>${head
+      .map((h) => `<th class="${h.num ? "num" : ""}">${h.label}</th>`)
+      .join("")}</tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }
+
+/* ---------------- 나머지 화면 ---------------- */
 
 function renderGeneric(title, key) {
   const records = getRecords(key);
@@ -628,7 +846,7 @@ function renderGeneric(title, key) {
     <div class="panel">
       <div class="panel-header"><h2>${title}</h2><span class="panel-meta">${records.length}건</span></div>
       <div class="panel-body">
-        ${renderTable(records.slice().reverse())}
+        ${renderTable(records.slice().reverse(), null, { detailTitle: title + " 상세" })}
       </div>
     </div>
   `;
@@ -644,11 +862,11 @@ function renderVehicle() {
     </div>
     <div class="panel">
       <div class="panel-header"><h2>정기주차 차량 현황</h2><span class="panel-meta">${parking.length}건</span></div>
-      <div class="panel-body">${renderTable(parking)}</div>
+      <div class="panel-body">${renderTable(parking, null, { detailTitle: "정기주차 상세" })}</div>
     </div>
     <div class="panel">
       <div class="panel-header"><h2>운행일지 검수</h2><span class="panel-meta">${log.length}건</span></div>
-      <div class="panel-body">${renderTable(log.slice().reverse())}</div>
+      <div class="panel-body">${renderTable(log.slice().reverse(), null, { detailTitle: "운행일지 상세" })}</div>
     </div>
   `;
 }
@@ -663,11 +881,11 @@ function renderMail() {
     </div>
     <div class="panel">
       <div class="panel-header"><h2>우편물 불출 기록</h2><span class="panel-meta">${mail.length}건</span></div>
-      <div class="panel-body">${renderTable(mail.slice().reverse())}</div>
+      <div class="panel-body">${renderTable(mail.slice().reverse(), null, { detailTitle: "우편물 상세" })}</div>
     </div>
     <div class="panel">
       <div class="panel-header"><h2>명함 · 네임플레이트 관리</h2><span class="panel-meta">${namecard.length}건</span></div>
-      <div class="panel-body">${renderTable(namecard)}</div>
+      <div class="panel-body">${renderTable(namecard, null, { detailTitle: "명함 상세" })}</div>
     </div>
   `;
 }
@@ -677,7 +895,7 @@ function monthBarChart(records, dateField) {
   records.forEach((r) => {
     const d = parseKDate(r[dateField]);
     if (!d) return;
-    const key = `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const key = monthKey(d);
     counts[key] = (counts[key] || 0) + 1;
   });
   const entries = Object.entries(counts).sort((a, b) => (a[0] < b[0] ? -1 : 1));
