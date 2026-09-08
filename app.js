@@ -1131,8 +1131,8 @@ function trendAreaChart(entries, unit) {
   </div>`;
 }
 
-/* 크루 x 월 히트맵. 순위 막대와 같은 이야기를 반복하지 않도록,
-   '누가 많이 쓰나'와 '언제 몰리나'를 한 판에서 같이 보여줍니다.
+/* 크루 x 월 히트맵. 총 건수 순으로 줄을 세워서 '순위'까지 이 한 판이 대신합니다.
+   '누가 많이 쓰나'(위에서부터)와 '언제 몰리나'(색 진하기)를 같이 봅니다.
    색은 한 가지 색조의 명암 5단계이고, 칸마다 숫자를 같이 적어 색만으로 읽지 않게 했습니다. */
 const HEAT_STEPS = ["#8FBBAF", "#6CA697", "#4E8F7E", "#377566", "#254741"];
 
@@ -1162,15 +1162,15 @@ function crewMonthHeatmap(rows, months) {
   const max = Math.max(...list.flatMap((c) => months.map((m) => c.months[m] || 0)), 1);
 
   const head = `<div class="hm-row hm-head">
-    <div class="hm-name"></div>
+    <div class="hm-name">순위 · 크루</div>
     ${months.map((m) => `<div class="hm-cell-head">${escapeHtml(m.slice(5))}월</div>`).join("")}
-    <div class="hm-total">합계</div>
+    <div class="hm-total">총 건수</div>
   </div>`;
 
   const body = list
     .map(
-      (c) => `<div class="hm-row">
-        <button class="hm-name hm-link" data-som-crew="${escapeHtml(c.name)}" title="${escapeHtml(c.name)} 상세 보기">${escapeHtml(c.name)}</button>
+      (c, i) => `<div class="hm-row">
+        <button class="hm-name hm-link" data-som-crew="${escapeHtml(c.name)}" title="${escapeHtml(c.name)} 상세 보기"><span class="bar-rank">${i + 1}</span>${escapeHtml(c.name)}</button>
         ${months
           .map((m) => {
             const v = c.months[m] || 0;
@@ -1188,7 +1188,7 @@ function crewMonthHeatmap(rows, months) {
   const legend = `<div class="hm-legend">
     <span>적음</span>
     ${HEAT_STEPS.map((c) => `<span class="hm-swatch" style="background:${c}"></span>`).join("")}
-    <span>많음 · 칸 안 숫자는 그 달의 불출 건수</span>
+    <span>많음 · 칸 안 숫자는 그 달의 불출 건수, 오른쪽 끝은 총 건수(=순위 기준)</span>
   </div>`;
 
   return `<div class="heatmap" style="--hm-cols:${months.length}">${head}${body}</div>${legend}`;
@@ -1475,12 +1475,8 @@ function renderSomopum() {
   const months = monthCounts.map(([m]) => m);
 
   // 순위는 '건수' 기준입니다. 수량은 품목마다 단위가 달라서(묶음/개/박스) 합치면 뜻이 없어집니다.
+  // 크루 순위는 아래 히트맵이 총 건수 순으로 줄을 세우면서 겸하고 있습니다.
   const itemRank = sumBy(rows, (r) => r.item)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 12);
-  const crewRank = sumBy(rows, (r) =>
-    r.target.nick ? `${r.target.name}(${r.target.nick})` : r.target.name
-  )
     .sort((a, b) => b.count - a.count)
     .slice(0, 12);
 
@@ -1533,18 +1529,10 @@ function renderSomopum() {
 
     <div class="panel">
       <div class="panel-header">
-        <h2>크루별 불출 히트맵</h2>
-        <span class="panel-meta">상위 12명 · 이름을 누르면 상세 내역</span>
+        <h2>많이 요청하는 크루 순위</h2>
+        <span class="panel-meta">총 불출 건수 순 · 상위 12명 · 이름을 누르면 상세 내역</span>
       </div>
       <div class="panel-body">${crewMonthHeatmap(rows, months)}</div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-header">
-        <h2>많이 요청하는 크루 순위</h2>
-        <span class="panel-meta">불출 건수 기준 · 상위 12 · 이름을 누르면 상세 내역</span>
-      </div>
-      <div class="panel-body">${rankBars(crewRank, "data-som-crew")}</div>
     </div>
   `;
 }
