@@ -8,24 +8,20 @@
 </head>
 <body>
 
-<!-- 잠금 화면: 왼쪽에 인트로 이미지, 오른쪽에 비밀번호 입력. 둘 다 고정입니다. -->
+<!-- 잠금 화면: 로고가 위, 비밀번호 입력이 바로 아래. 화면 크기에 맞춰 같이 줄어듭니다. -->
 <div class="lock-overlay" id="lockOverlay">
-  <div class="lock-split">
-    <div class="lock-visual">
-      <img id="introImg" src="./intro.jpg" alt="KAKAO VX & LINKAGE LAB" />
-    </div>
+  <div class="lock-stack">
+    <img id="introImg" class="lock-logo" src="./intro.png" alt="LINKAGE LAB" />
 
-    <div class="lock-panel">
-      <div class="lock-box">
-        <h2>LKG Workboard</h2>
-        <p>비밀번호를 입력하면 대시보드가 열립니다.</p>
-        <!-- 브라우저·비밀번호 관리자가 저장할 수 있게 해둡니다.
-             긴 비밀번호를 매번 타이핑하지 않아도 되도록 하기 위한 것입니다. -->
-        <input type="password" id="pinInput" name="workboard-password"
-               placeholder="비밀번호" autocomplete="current-password" />
-        <button id="pinSubmit">확인</button>
-        <p class="lock-error" id="lockError"></p>
-      </div>
+    <div class="lock-box">
+      <h2>LKG Workboard</h2>
+      <p>비밀번호를 입력하면 대시보드가 열립니다.</p>
+      <!-- 브라우저·비밀번호 관리자가 저장할 수 있게 해둡니다.
+           긴 비밀번호를 매번 타이핑하지 않아도 되도록 하기 위한 것입니다. -->
+      <input type="password" id="pinInput" name="workboard-password"
+             placeholder="비밀번호" autocomplete="current-password" />
+      <button id="pinSubmit">확인</button>
+      <p class="lock-error" id="lockError"></p>
     </div>
   </div>
 </div>
