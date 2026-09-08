@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LKG Workboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 시작 인트로 화면. 이미지가 뜬 뒤 잠시 보였다가 자동으로 사라집니다. -->
+<div class="intro-overlay" id="introOverlay">
+  <img id="introImg" src="./intro.jpg" alt="KAKAO VX & LINKAGE LAB" />
+  <p class="intro-skip">화면을 누르면 바로 넘어갑니다</p>
+</div>
+
+<div class="lock-overlay" id="lockOverlay">
+  <div class="lock-box">
+    <h2>LKG Workboard</h2>
+    <p>비밀번호를 입력하면 대시보드가 열립니다.</p>
+    <!-- 브라우저·비밀번호 관리자가 저장할 수 있게 해둡니다.
+         긴 비밀번호를 매번 타이핑하지 않아도 되도록 하기 위한 것입니다. -->
+    <input type="password" id="pinInput" name="workboard-password"
+           placeholder="비밀번호" autocomplete="current-password" />
+    <button id="pinSubmit">확인</button>
+    <p class="lock-error" id="lockError"></p>
+  </div>
+</div>
+
+<div class="app" id="appRoot" style="display:none;">
+
+  <!-- 사이드바 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <button class="hamburger" id="hamburgerBtn" aria-label="메뉴 열기/닫기">
+        <span></span><span></span><span></span>
+      </button>
+      <span class="brand">LKG Workboard</span>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-view="overview">
+        <span class="nav-icon">▦</span><span class="nav-label">개요</span>
+      </button>
+      <button class="nav-item" data-view="jeonsan">
+        <span class="nav-icon">🖥</span><span class="nav-label">전산</span>
+      </button>
+      <button class="nav-item" data-view="tangbisil">
+        <span class="nav-icon">☕</span><span class="nav-label">탕비실</span>
+      </button>
+      <button class="nav-item" data-view="somopum">
+        <span class="nav-icon">📦</span><span class="nav-label">소모품</span>
+      </button>
+      <button class="nav-item" data-view="vehicle">
+        <span class="nav-icon">🚗</span><span class="nav-label">법인차량</span>
+      </button>
+      <button class="nav-item" data-view="mail">
+        <span class="nav-icon">✉</span><span class="nav-label">우편물</span>
+      </button>
+
+      <hr class="nav-divider" />
+
+      <button class="nav-item" data-view="annual">
+        <span class="nav-icon">📊</span><span class="nav-label">연간 통계</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer" id="lastUpdated">업데이트 확인 중...</div>
+  </aside>
+
+  <!-- 본문 -->
+  <main class="main">
+    <header class="topbar">
+      <h1 id="pageTitle">개요</h1>
+    </header>
+
+    <section class="content" id="content">
+      <p class="loading">데이터를 불러오는 중입니다...</p>
+    </section>
+  </main>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+{
+  "sources": {
+    "jeonsan_status": {
+      "spreadsheet_id": "1e1rLhyqA1jVjlyTgW8YA96tOh2Dgtvpn6vtRMEBiyIQ",
+      "gid": 0,
+      "label": "전산_업무현황"
+    },
+    "jeonsan_asset": {
+      "spreadsheet_id": "1e1rLhyqA1jVjlyTgW8YA96tOh2Dgtvpn6vtRMEBiyIQ",
+      "gid": 233850745,
+      "label": "전산_자산지급대장"
+    },
+    "jeonsan_io": {
+      "spreadsheet_id": "1e1rLhyqA1jVjlyTgW8YA96tOh2Dgtvpn6vtRMEBiyIQ",
+      "gid": 1149502511,
+      "label": "전산_입출고대여로그"
+    },
+    "tangbisil": {
+      "spreadsheet_id": "1xMseZdEANn8imzsj5jJcclwpPiOS3J3CeEfXvj5yS1M",
+      "dynamic_month": true,
+      "label": "탕비실_이번달"
+    },
+    "somopum": {
+      "spreadsheet_id": "1aQr0fg2p3YhfghxxnhpciH4vWBHicgJx1EhkaEDIJEA",
+      "gid": 72793834,
+      "label": "소모품"
+    },
+    "vehicle_parking": {
+      "spreadsheet_id": "1kHDXGO-kMXQHfGpp4273tCuCCRklJqKoQs6lHvvSUhw",
+      "gid": 1727006519,
+      "label": "법인차량_정기주차"
+    },
+    "vehicle_log": {
+      "spreadsheet_id": "1QeugtPqQsFik-7QS8n0XAd_boLHFZh1Mc43-BNDxCZk",
+      "gid": 1601141619,
+      "label": "법인차량_운행일지"
+    },
+    "mail_log": {
+      "spreadsheet_id": "1MXs8z4ovNeS0oNwpWw5qGRUEtdfkzIbEGqCqEy3agZI",
+      "gid": 1490894300,
+      "label": "우편물_불출"
+    },
+    "namecard": {
+      "spreadsheet_id": "1EVPwbsmvUcfTFtRSsuTc3jF9XZdi3ELSvuz1WthKrRI",
+      "gid": 1490894300,
+      "label": "명함_네임플레이트"
+    }
+  }
+}

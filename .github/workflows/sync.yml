@@ -1,0 +1,67 @@
+name: Sync Google Sheets to JSON
+
+on:
+  schedule:
+    # 15분마다 자동 실행 (UTC 기준이라 한국시간과 9시간 차이납니다)
+    - cron: '*/15 * * * *'
+  # 이 버튼을 누르면 수동으로도 즉시 실행할 수 있습니다 (Actions 탭 > Run workflow)
+  workflow_dispatch:
+
+# 데이터를 저장소에 커밋하지 않고 Pages로 바로 배포하므로, 저장소 쓰기 권한이 필요 없습니다.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 같은 워크플로가 동시에 두 개 이상 돌지 않게 막습니다.
+concurrency:
+  group: sync-sheets
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: 저장소 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: 필요한 라이브러리 설치
+        run: pip install -r requirements.txt
+
+      - name: 구글 시트 -> JSON 변환 실행
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          WORKBOARD_PIN: ${{ secrets.WORKBOARD_PIN }}
+        run: python scripts/sync_sheets.py
+
+      # 웹에 올릴 파일만 _site 폴더에 모읍니다.
+      # scripts/ 와 config/ 는 여기에 넣지 않으므로 사이트에 배포되지 않습니다.
+      - name: 배포할 사이트 폴더 구성
+        run: |
+          set -e
+          mkdir -p _site/data
+          cp index.html app.js style.css _site/
+          [ -f intro.jpg ] && cp intro.jpg _site/ || echo "intro.jpg 없음 (인트로 화면 생략)"
+          cp data/workboard.json _site/data/
+          echo "배포 대상:"
+          ls -lhR _site
+
+      - name: Pages 아티팩트 업로드
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: GitHub Pages로 배포
+        id: deploy
+        uses: actions/deploy-pages@v4
