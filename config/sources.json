@@ -22,8 +22,14 @@
     },
     "somopum": {
       "spreadsheet_id": "1aQr0fg2p3YhfghxxnhpciH4vWBHicgJx1EhkaEDIJEA",
+      "gid": 198622249,
+      "label": "소모품_불출대장"
+    },
+    "somopum_stock": {
+      "spreadsheet_id": "1aQr0fg2p3YhfghxxnhpciH4vWBHicgJx1EhkaEDIJEA",
       "gid": 72793834,
-      "label": "소모품"
+      "special": "somopum_stock",
+      "label": "소모품_월별불출량검수"
     },
     "vehicle_parking": {
       "spreadsheet_id": "1kHDXGO-kMXQHfGpp4273tCuCCRklJqKoQs6lHvvSUhw",
