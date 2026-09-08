@@ -538,7 +538,7 @@ table.data-table tr:hover td {
 
 .bar-row {
   display: grid;
-  grid-template-columns: 70px 1fr 56px;
+  grid-template-columns: 76px 1fr 84px;
   align-items: center;
   gap: 12px;
 }
@@ -560,6 +560,62 @@ table.data-table tr:hover td {
   height: 100%;
   background: var(--accent);
   border-radius: 6px;
+}
+
+/* 순위 막대: 품목명·크루명이 길어서 왼쪽을 넓게 씁니다 */
+.rank-chart .bar-row {
+  grid-template-columns: minmax(130px, 32%) 1fr 132px;
+}
+
+.rank-chart .bar-label {
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar-rank {
+  display: inline-block;
+  min-width: 18px;
+  margin-right: 7px;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+/* 월 선택 탭 (소모품 월별 잔여 재고) */
+.month-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 16px 20px 0;
+}
+
+.month-tab {
+  padding: 7px 15px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.month-tab:hover { border-color: var(--accent); color: var(--accent); }
+
+.month-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.month-summary {
+  padding: 12px 20px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-soft);
 }
 
 .bar-row .bar-count {
@@ -877,11 +933,15 @@ tr.row-clickable { cursor: pointer; }
 
 /* ---------- 검색창 ---------- */
 .search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 16px;
 }
 
 .search-bar input {
-  width: 100%;
+  flex: 1 1 320px;
   max-width: 420px;
   padding: 11px 15px;
   border: 1px solid var(--border);
@@ -924,6 +984,37 @@ body.modal-open { overflow: hidden; }
   flex-direction: column;
   box-shadow: 0 24px 60px rgba(46, 42, 36, 0.28);
 }
+
+.modal.modal-wide { max-width: 1180px; }
+
+.modal-note {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.modal-sub {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.modal-back {
+  display: inline-block;
+  margin-bottom: 14px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.modal-back:hover { border-color: var(--accent); color: var(--accent); }
 
 .modal-header {
   display: flex;
@@ -1074,58 +1165,92 @@ body.modal-open { overflow: hidden; }
   margin: 12px 0 0 !important;
 }
 
-/* ---------- 크루별 조회 (카테고리 선택 방식) ---------- */
-.crew-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 18px;
+/* ---------- 크루별 조회 ---------- */
+.crew-search-btn {
+  padding: 11px 20px;
+  border: none;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
-.crew-tab {
-  flex: 1 1 200px;
+.crew-search-btn:hover { filter: brightness(1.06); }
+
+/* 조회 후 패널에 남는 한 줄 요약 + 창 다시 열기 */
+.crew-recall {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid #CFE0DA;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.crew-recall-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
   background: var(--surface);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* 팝업 안, 대장 고르기 목록 */
+.crew-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.crew-pick {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 16px 18px;
   border: 1px solid var(--border);
   border-radius: 11px;
-  padding: 14px 16px;
-  text-align: left;
+  background: var(--surface);
   font-family: inherit;
+  text-align: left;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.crew-tab:hover { border-color: var(--accent); }
-
-.crew-tab.active {
+.crew-pick:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
 
-.crew-tab-label {
-  font-size: 13px;
+.crew-pick-label {
+  flex: 1;
+  font-size: 14.5px;
   font-weight: 700;
   color: var(--text);
 }
 
-.crew-tab-count {
-  font-size: 21px;
-  font-weight: 700;
+.crew-pick-count {
+  font-size: 16px;
+  font-weight: 800;
   color: var(--accent);
-  margin-top: 4px;
 }
 
-.crew-tab-sub {
-  font-size: 12px;
+.crew-pick-arrow {
+  font-size: 20px;
   color: var(--text-soft);
-  margin-top: 3px;
 }
-
-.crew-tab:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.crew-tab:disabled:hover { border-color: var(--border); }
 
 /* ---------- 가운데 정렬 표 (전산) ---------- */
 table.data-table.center-all th,
