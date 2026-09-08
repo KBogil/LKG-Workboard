@@ -428,7 +428,7 @@ table.data-table tr:hover td {
   .content, .topbar { padding-left: 20px; padding-right: 20px; }
 }
 
-/* ---------- 잠금 화면 (좌: 이미지 / 우: 비밀번호) ---------- */
+/* ---------- 잠금 화면 (로고 위 / 비밀번호 아래) ---------- */
 .lock-overlay {
   position: fixed;
   inset: 0;
@@ -437,50 +437,28 @@ table.data-table tr:hover td {
   align-items: center;
   justify-content: center;
   z-index: 100;
-  padding: 32px;
+  padding: 24px;
   overflow: auto;
 }
 
-.lock-split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+/* 로고와 입력칸이 하나의 덩어리로 화면 가운데 놓이고,
+   화면이 작아지면 둘 다 같은 비율로 줄어듭니다. */
+.lock-stack {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 56px;
+  gap: clamp(20px, 4vh, 40px);
   width: 100%;
-  max-width: 1180px;
-  max-height: 100%;
+  max-width: 420px;
 }
 
-.lock-visual {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  min-height: 0;
-}
-
-.lock-visual img {
-  max-width: 100%;
-  max-height: min(76vh, 660px);
-  width: auto;
+.lock-logo {
+  width: clamp(200px, 62vw, 340px);
+  max-height: 38vh;
+  height: auto;
   object-fit: contain;
-  border-radius: 16px;
-  box-shadow: 0 20px 54px rgba(46, 42, 36, 0.20);
-}
-
-.lock-panel {
-  display: flex;
-  justify-content: flex-start;
-}
-
-/* 화면이 좁으면 이미지를 위, 입력칸을 아래로 자연스럽게 쌓습니다. */
-@media (max-width: 900px) {
-  .lock-split {
-    grid-template-columns: 1fr;
-    gap: 24px;
-    justify-items: center;
-  }
-  .lock-visual { justify-content: center; }
-  .lock-visual img { max-height: 46vh; }
+  flex-shrink: 1;
+  min-height: 0;
 }
 
 /* ---------- 사이드바 하단 고정 메뉴 구분선 ---------- */
@@ -1035,3 +1013,56 @@ body.modal-open { overflow: hidden; }
   font-size: 12.5px;
   margin: 12px 0 0 !important;
 }
+
+/* ---------- 크루별 조회 (카테고리 선택 방식) ---------- */
+.crew-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.crew-tab {
+  flex: 1 1 200px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 14px 16px;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.crew-tab:hover { border-color: var(--accent); }
+
+.crew-tab.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.crew-tab-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.crew-tab-count {
+  font-size: 21px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-top: 4px;
+}
+
+.crew-tab-sub {
+  font-size: 12px;
+  color: var(--text-soft);
+  margin-top: 3px;
+}
+
+.crew-tab:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.crew-tab:disabled:hover { border-color: var(--border); }
