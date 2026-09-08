@@ -7,6 +7,8 @@
     - dynamic_month가 true이면: "OO년 O월" 형식의 "이번 달" 탭을 자동으로 찾아 읽습니다.
 - 탕비실은 전용 처리(build_tangbisil_data)를 탑니다. A~F열은 고정 의미로 읽고,
   G열 이후의 "일자별 블록"은 위치를 하드코딩하지 않고 헤더에서 자동으로 찾아냅니다.
+- 소모품 "월별 불출량&검수" 탭도 전용 처리(build_somopum_stock)를 탑니다.
+  가로로 월 블록이 이어지는 형태라 일반 표로는 읽을 수 없습니다.
 - 결과는 WORKBOARD_PIN(비밀번호)으로 암호화되어 data/workboard.json에 저장됩니다.
 - 이 파일은 저장소에 커밋하지 않고, 워크플로가 GitHub Pages로 바로 배포합니다.
   (암호화된 데이터는 압축이 안 돼서, 커밋으로 쌓으면 저장소가 기가 단위로 불어납니다)
@@ -39,6 +41,13 @@ DATE_HEADER_RE = re.compile(r"(\d{4})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})")
 # 알아서 처리하므로, 여기에는 '달력에 없는 우리 회사만의 쉬는 날'만 적으면 됩니다.
 # 예: EXTRA_HOLIDAYS = {"2026-10-16", "2026-12-24"}
 EXTRA_HOLIDAYS = set()
+
+# 소모품 "월별 불출량&검수" 시트 (가로로 월 블록이 이어지는 형태)
+SOMOPUM_LABEL_ROW = 2       # 2행: "9월" 같은 월 표시와 "월별 불출량" 같은 구역 제목
+SOMOPUM_HEADER_ROW = 3      # 3행: 품목 / 수량 / 재고 같은 열 이름
+SOMOPUM_FIRST_DATA_ROW = 4  # 4행부터 데이터
+
+MONTH_LABEL_RE = re.compile(r"^\s*(\d{1,2})\s*월\s*$")
 
 
 # ---------------------------------------------------------------- 암호화
@@ -406,6 +415,152 @@ def build_tangbisil_data(spreadsheet_id, access_token, meta):
     }
 
 
+# ------------------------------------------------ 소모품 월별 불출량 & 재고
+
+def sheet_row(rows, one_based):
+    """1부터 세는 행 번호로 행을 꺼냅니다. 없으면 빈 리스트."""
+    idx = one_based - 1
+    return rows[idx] if 0 <= idx < len(rows) else []
+
+
+def label_positions(row, start, end):
+    """구간 안에서 '글자가 적힌 칸'의 위치와 내용을 순서대로 돌려줍니다.
+    병합된 제목은 맨 왼쪽 칸에만 값이 들어오므로, 이 위치가 곧 구역의 시작입니다."""
+    found = []
+    for i in range(start, min(end, len(row))):
+        text = clean_cell(row[i])
+        if text:
+            found.append((i, text))
+    return found
+
+
+def find_col(head_row, start, end, *keywords, exclude=()):
+    """구간 안에서 열 이름에 keyword가 들어간 첫 번째 열 번호를 찾습니다."""
+    for i in range(start, min(end, len(head_row))):
+        name = clean_cell(head_row[i]).replace(" ", "").replace("\n", "")
+        if not name:
+            continue
+        if any(x in name for x in exclude):
+            continue
+        if any(k in name for k in keywords):
+            return i
+    return None
+
+
+def build_somopum_stock(rows):
+    """가로로 월 블록이 이어지는 시트를 월별 품목 목록으로 바꿉니다.
+
+    한 달 블록은 보통 세 구역으로 나뉩니다.
+      - "월별 불출량"      : 품목 / 수량 / 평균
+      - "상시 수량 조사"   : 재고 수량 / 입고 수량   (왼쪽 품목 행과 같은 줄)
+      - "N월 재고 조사"    : No. / 품목 / N월 재고 / 실물 재고 / 불출수량
+    열 위치는 달마다 다르므로 하드코딩하지 않고, 2행의 제목을 보고 매번 찾아냅니다.
+    """
+    label_row = sheet_row(rows, SOMOPUM_LABEL_ROW)
+    head_row = sheet_row(rows, SOMOPUM_HEADER_ROW)
+    if not label_row:
+        return {"months": [], "note": "2행에서 월 표시를 찾지 못했습니다."}
+
+    # 2행에서 "9월"처럼 월만 적힌 칸 = 그 달 블록의 시작
+    anchors = []
+    for i in range(len(label_row)):
+        m = MONTH_LABEL_RE.match(clean_cell(label_row[i]))
+        if m:
+            anchors.append((i, int(m.group(1))))
+
+    if not anchors:
+        return {"months": [], "note": "2행에서 'N월' 형태의 칸을 찾지 못했습니다."}
+
+    months = []
+    for pos, (start, month_no) in enumerate(anchors):
+        end = anchors[pos + 1][0] if pos + 1 < len(anchors) else len(head_row)
+
+        # 블록 안의 구역 제목 위치 (월 표시 칸 자신은 제외)
+        subs = [(i, t) for i, t in label_positions(label_row, start, end)
+                if not MONTH_LABEL_RE.match(t)]
+
+        def sub_range(*keywords, avoid=()):
+            for idx, (col, text) in enumerate(subs):
+                flat = text.replace(" ", "")
+                if any(a in flat for a in avoid):
+                    continue
+                if any(k in flat for k in keywords):
+                    stop = subs[idx + 1][0] if idx + 1 < len(subs) else end
+                    return col, stop
+            return None
+
+        usage = sub_range("불출량")
+        live = sub_range("수량조사")
+        audit = sub_range("재고조사")
+
+        items = {}   # 품목 -> 값 모음 (같은 품목이 두 구역에 나오므로 합쳐 담습니다)
+        order = []
+
+        def slot(name):
+            if name not in items:
+                items[name] = {"품목": name}
+                order.append(name)
+            return items[name]
+
+        # ① 월별 불출량 (+ 같은 줄의 상시 수량 조사)
+        if usage:
+            u0, u1 = usage
+            c_item = find_col(head_row, u0, u1, "품목")
+            c_qty = find_col(head_row, u0, u1, "수량")
+            c_avg = find_col(head_row, u0, u1, "평균")
+            c_stock = c_in = None
+            if live:
+                l0, l1 = live
+                c_stock = find_col(head_row, l0, l1, "재고")
+                # "재고 수량 ... + 입고수량" 처럼 재고 열 이름에도 '입고'가 들어있어서,
+                # 재고라는 말이 없는 열에서만 '입고'를 찾습니다.
+                c_in = find_col(head_row, l0, l1, "입고", exclude=("재고",))
+                if c_in is None and c_stock is not None and c_stock + 1 < l1:
+                    c_in = c_stock + 1
+            if c_item is not None:
+                for row in rows[SOMOPUM_FIRST_DATA_ROW - 1:]:
+                    name = clean_cell(cell(row, c_item))
+                    if not name:
+                        continue
+                    it = slot(name)
+                    it["불출량"] = to_number(cell(row, c_qty)) if c_qty is not None else None
+                    it["평균"] = to_number(cell(row, c_avg)) if c_avg is not None else None
+                    if c_stock is not None:
+                        it["재고수량"] = to_number(cell(row, c_stock))
+                    if c_in is not None:
+                        it["입고수량"] = to_number(cell(row, c_in))
+
+        # ② N월 재고 조사
+        if audit:
+            a0, a1 = audit
+            c_item = find_col(head_row, a0, a1, "품목")
+            c_remain = find_col(head_row, a0, a1, "재고", exclude=("실물",))
+            c_real = find_col(head_row, a0, a1, "실물")
+            c_out = find_col(head_row, a0, a1, "불출")
+            if c_item is not None:
+                for row in rows[SOMOPUM_FIRST_DATA_ROW - 1:]:
+                    name = clean_cell(cell(row, c_item))
+                    if not name:
+                        continue
+                    it = slot(name)
+                    if c_remain is not None:
+                        it["잔여재고"] = to_number(cell(row, c_remain))
+                    if c_real is not None:
+                        it["실물재고"] = to_number(cell(row, c_real))
+                    if c_out is not None:
+                        it["검수불출량"] = to_number(cell(row, c_out))
+
+        rows_out = [items[n] for n in order]
+        # 값이 하나도 없는(이름만 있는) 품목은 버립니다
+        rows_out = [r for r in rows_out
+                    if any(v is not None for k, v in r.items() if k != "품목")]
+        if rows_out:
+            months.append({"month": month_no, "label": f"{month_no}월", "items": rows_out})
+
+    months.sort(key=lambda m: m["month"])
+    return {"months": months, "latest": months[-1]["label"] if months else None}
+
+
 # ---------------------------------------------------------------- 일반 시트
 
 # 구글 시트의 수식 오류 값들. 값이 아니라 오류이므로 빈 칸으로 취급합니다.
@@ -510,7 +665,23 @@ def main():
                 data[key] = []
                 continue
 
-        records = rows_to_records(get_values(spreadsheet_id, title, access_token))
+        rows = get_values(spreadsheet_id, title, access_token)
+
+        if source.get("special") == "somopum_stock":
+            # 가로로 월 블록이 이어지는 시트라 전용 처리를 탑니다.
+            try:
+                stock = build_somopum_stock(rows)
+            except Exception:
+                import traceback
+                print("[오류] 소모품 월별 불출량 시트 처리 중 문제가 발생했습니다.")
+                traceback.print_exc()
+                stock = {"months": []}
+            data[key] = stock
+            summary = ", ".join(f"{m['label']} {len(m['items'])}품목" for m in stock["months"])
+            print(f"[완료] {key} ({title}): {summary or stock.get('note', '읽은 월 없음')}")
+            continue
+
+        records = rows_to_records(rows)
         data[key] = records
         print(f"[완료] {key} ({title}): {len(records)}건")
 
