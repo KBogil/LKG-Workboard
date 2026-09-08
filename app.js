@@ -510,18 +510,6 @@ function renderOverview() {
       ${ownerCard("법인차량", "박동국(Kaju)", (vehicleLog === null ? vehicleLogAll : vehicleLog).length + "건")}
       ${ownerCard("우편물", "박동국(Kaju)", (mail === null ? mailAll : mail).length + "건")}
     </div>
-
-    <div class="panel">
-      <div class="panel-header">
-        <h2>최근 전산 업무 (최신 10건)</h2>
-        <span class="panel-meta">${monthLabel} 기준</span>
-      </div>
-      <div class="panel-body">
-        ${renderTable(jeonsan.slice(-10).reverse(),
-          ["유형","요청자","부서","자산번호","업무내용","담당자","완료일자","진행상태"],
-          { detailTitle: "전산 업무 상세", center: true })}
-      </div>
-    </div>
   `;
 }
 
@@ -762,6 +750,10 @@ function renderJeonsan() {
   const doneCount = status.filter((r) => (r["진행상태"] || "").includes("완료")).length;
   const ingCount = status.length - doneCount;
 
+  const now = new Date();
+  const monthLabel = `${now.getFullYear()}년 ${now.getMonth() + 1}월`;
+  const thisMonth = filterCurrentMonthJeonsan(status);
+
   HANDLER_STATS = handlerMonthlyStats(status);
   const people = Object.entries(HANDLER_STATS).sort((a, b) => b[1].total - a[1].total);
 
@@ -798,6 +790,19 @@ function renderJeonsan() {
 
       <div class="crew-result-box" id="crewResult">
         <div class="empty-note">이름을 입력하고 조회를 누르면, 기록이 있는 대장을 별도 창에서 골라볼 수 있습니다.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>최근 전산 업무 (최신 10건)</h2>
+        <span class="panel-meta">${monthLabel} 기준</span>
+      </div>
+      <div class="panel-body">
+        ${renderTable(thisMonth.slice(-10).reverse(),
+          ["유형","요청자","부서","자산번호","업무내용","담당자","완료일자","진행상태"],
+          { detailTitle: "전산 업무 상세", center: true,
+            emptyText: monthLabel + "에 등록된 업무가 없습니다." })}
       </div>
     </div>
 
@@ -1029,19 +1034,164 @@ function sumBy(rows, keyFn) {
   return [...map.values()].sort((a, b) => b.qty - a.qty || b.count - a.count);
 }
 
-/* 순위 막대. 색만으로 읽히지 않도록 숫자를 항상 같이 적습니다. */
-function rankBars(entries, unit) {
+/* 순위 막대. 품목/크루 이름을 누르면 상세 팝업이 열립니다.
+   막대 길이는 '건수'입니다. 수량은 품목마다 표기 단위가 달라서(묶음/개/박스)
+   서로 더하면 뜻이 없어지기 때문입니다. */
+function rankBars(entries, attr) {
   if (!entries.length) return `<div class="empty-note">집계할 자료가 없습니다.</div>`;
-  const max = Math.max(...entries.map((e) => e.qty), 1);
+  const max = Math.max(...entries.map((e) => e.count), 1);
   return `<div class="bar-chart rank-chart">${entries
     .map(
       (e, i) => `<div class="bar-row">
-        <div class="bar-label" title="${escapeHtml(e.key)}"><span class="bar-rank">${i + 1}</span>${escapeHtml(e.key)}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:${Math.round((e.qty / max) * 100)}%"></div></div>
-        <div class="bar-count">${e.qty.toLocaleString()}${unit} · ${e.count}건</div>
+        <button class="bar-link" ${attr}="${escapeHtml(e.key)}" title="${escapeHtml(e.key)} 상세 보기">
+          <span class="bar-rank">${i + 1}</span>${escapeHtml(e.key)}
+        </button>
+        <div class="bar-track"><div class="bar-fill" style="width:${Math.round((e.count / max) * 100)}%"></div></div>
+        <div class="bar-count">${e.count}건</div>
       </div>`
     )
     .join("")}</div>`;
+}
+
+/* 축 눈금이 예쁘게 떨어지도록 최댓값을 올림합니다. (7 -> 10, 23 -> 25 처럼) */
+function niceMax(value) {
+  if (value <= 5) return 5;
+  const exp = Math.pow(10, Math.floor(Math.log10(value)));
+  const unit = value / exp;
+  const step = unit <= 1 ? 1 : unit <= 2 ? 2 : unit <= 2.5 ? 2.5 : unit <= 5 ? 5 : 10;
+  return step * exp;
+}
+
+/* 시간 흐름은 막대보다 선이 읽기 쉬워서, 월별 추이는 면적 선그래프로 그립니다.
+   점 위에 마우스를 올리면 그 달의 값이 뜹니다. */
+function trendAreaChart(entries, unit) {
+  if (!entries.length) {
+    return `<div class="empty-note">날짜를 읽을 수 있는 기록이 없습니다.</div>`;
+  }
+  if (entries.length === 1) {
+    // 한 달치뿐이면 선그래프가 의미 없으므로 숫자 하나로 보여줍니다.
+    return `<div class="single-stat">
+      <div class="single-stat-label">${escapeHtml(entries[0][0])}</div>
+      <div class="single-stat-value">${entries[0][1].toLocaleString()}${unit}</div>
+    </div>`;
+  }
+
+  const W = 760, H = 240, PL = 54, PR = 20, PT = 24, PB = 36;
+  const top = niceMax(Math.max(...entries.map((e) => e[1])));
+  const px = (i) => PL + (i * (W - PL - PR)) / (entries.length - 1);
+  const py = (v) => PT + (1 - v / top) * (H - PT - PB);
+
+  const grid = [0, 0.25, 0.5, 0.75, 1]
+    .map((f) => {
+      const v = top * f;
+      const y = py(v);
+      return `<line class="tc-grid" x1="${PL}" x2="${W - PR}" y1="${y}" y2="${y}" />
+        <text class="tc-ytick" x="${PL - 10}" y="${y + 4}" text-anchor="end">${Math.round(v).toLocaleString()}</text>`;
+    })
+    .join("");
+
+  const line = entries.map((e, i) => `${i ? "L" : "M"}${px(i)},${py(e[1])}`).join(" ");
+  const area = `${line} L${px(entries.length - 1)},${py(0)} L${px(0)},${py(0)} Z`;
+
+  const maxIdx = entries.reduce((b, e, i) => (e[1] > entries[b][1] ? i : b), 0);
+  const step = (W - PL - PR) / (entries.length - 1);
+
+  const points = entries
+    .map(([label, value], i) => {
+      const cx = px(i), cy = py(value);
+      const tx = Math.min(Math.max(cx, PL + 62), W - PR - 62);
+      // 값이 항상 보이는 것은 최댓값과 마지막 달 두 개뿐입니다 (전부 적으면 지저분해집니다)
+      const hasLabel = i === maxIdx || i === entries.length - 1;
+      const fixed = hasLabel
+        ? `<text class="tc-value" x="${cx}" y="${cy - 12}" text-anchor="middle">${value.toLocaleString()}</text>`
+        : "";
+      // 고정 라벨이 있는 점은 말풍선을 한 단 더 올려서 숫자를 가리지 않게 합니다.
+      const lift = hasLabel ? 18 : 0;
+      return `<g class="tc-pt">
+        <rect class="tc-hit" x="${cx - step / 2}" y="${PT}" width="${step}" height="${H - PT - PB}" />
+        <line class="tc-cross" x1="${cx}" x2="${cx}" y1="${PT}" y2="${H - PB}" />
+        <circle class="tc-dot" cx="${cx}" cy="${cy}" r="4" />
+        ${fixed}
+        <g class="tc-tip" transform="translate(${tx},${cy - lift})">
+          <rect x="-60" y="-42" width="120" height="26" rx="6" />
+          <text x="0" y="-24" text-anchor="middle">${escapeHtml(label)} · ${value.toLocaleString()}${unit}</text>
+        </g>
+      </g>
+      <text class="tc-xtick" x="${cx}" y="${H - PB + 20}" text-anchor="middle">${escapeHtml(label)}</text>`;
+    })
+    .join("");
+
+  return `<div class="trend-chart">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="월별 추이">
+      ${grid}
+      <path class="tc-area" d="${area}" />
+      <path class="tc-line" d="${line}" />
+      ${points}
+    </svg>
+  </div>`;
+}
+
+/* 크루 x 월 히트맵. 순위 막대와 같은 이야기를 반복하지 않도록,
+   '누가 많이 쓰나'와 '언제 몰리나'를 한 판에서 같이 보여줍니다.
+   색은 한 가지 색조의 명암 5단계이고, 칸마다 숫자를 같이 적어 색만으로 읽지 않게 했습니다. */
+const HEAT_STEPS = ["#8FBBAF", "#6CA697", "#4E8F7E", "#377566", "#254741"];
+
+function heatLevel(value, max) {
+  if (!value) return -1;
+  const idx = Math.ceil((value / max) * HEAT_STEPS.length) - 1;
+  return Math.min(Math.max(idx, 0), HEAT_STEPS.length - 1);
+}
+
+function crewMonthHeatmap(rows, months) {
+  const byCrew = new Map();
+  rows.forEach((r) => {
+    const name = r.target.nick ? `${r.target.name}(${r.target.nick})` : r.target.name;
+    if (!name || !r.date) return;
+    const key = monthKey(r.date);
+    if (!byCrew.has(name)) byCrew.set(name, { name, total: 0, months: {} });
+    const slot = byCrew.get(name);
+    slot.total += 1;
+    slot.months[key] = (slot.months[key] || 0) + 1;
+  });
+
+  const list = [...byCrew.values()].sort((a, b) => b.total - a.total).slice(0, 12);
+  if (!list.length || !months.length) {
+    return `<div class="empty-note">집계할 자료가 없습니다.</div>`;
+  }
+
+  const max = Math.max(...list.flatMap((c) => months.map((m) => c.months[m] || 0)), 1);
+
+  const head = `<div class="hm-row hm-head">
+    <div class="hm-name"></div>
+    ${months.map((m) => `<div class="hm-cell-head">${escapeHtml(m.slice(5))}월</div>`).join("")}
+    <div class="hm-total">합계</div>
+  </div>`;
+
+  const body = list
+    .map(
+      (c) => `<div class="hm-row">
+        <button class="hm-name hm-link" data-som-crew="${escapeHtml(c.name)}" title="${escapeHtml(c.name)} 상세 보기">${escapeHtml(c.name)}</button>
+        ${months
+          .map((m) => {
+            const v = c.months[m] || 0;
+            const lv = heatLevel(v, max);
+            const style = lv < 0 ? "" : `background:${HEAT_STEPS[lv]};`;
+            const cls = lv < 0 ? "hm-cell zero" : `hm-cell${lv >= 2 ? " on-dark" : ""}`;
+            return `<div class="${cls}" style="${style}" title="${escapeHtml(m)} · ${v}건">${v || ""}</div>`;
+          })
+          .join("")}
+        <div class="hm-total">${c.total}</div>
+      </div>`
+    )
+    .join("");
+
+  const legend = `<div class="hm-legend">
+    <span>적음</span>
+    ${HEAT_STEPS.map((c) => `<span class="hm-swatch" style="background:${c}"></span>`).join("")}
+    <span>많음 · 칸 안 숫자는 그 달의 불출 건수</span>
+  </div>`;
+
+  return `<div class="heatmap" style="--hm-cols:${months.length}">${head}${body}</div>${legend}`;
 }
 
 /* --- 월별 잔여 재고 --- */
@@ -1095,6 +1245,76 @@ function somStockPanel() {
     ${body}`;
 }
 
+/* 월별 불출 '건수'를 [["2026.09", 12], ...] 형태로 만듭니다. */
+function monthlyCounts(rows) {
+  const map = new Map();
+  rows.forEach((r) => {
+    if (!r.date) return;
+    const k = monthKey(r.date);
+    map.set(k, (map.get(k) || 0) + 1);
+  });
+  return [...map.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+}
+
+/* 품목 하나의 월별 불출 상세 팝업 */
+function openItemModal(itemName) {
+  const rows = somopumRows().filter((r) => r.item === itemName);
+  const modal = document.querySelector(".modal");
+  if (modal) modal.classList.add("modal-wide");
+
+  if (!rows.length) {
+    openModal(`${itemName} · 월별 불출량`, `<div class="empty-note">기록이 없습니다.</div>`);
+    return;
+  }
+
+  const counts = monthlyCounts(rows);
+  const qtyByMonth = new Map();
+  rows.forEach((r) => {
+    if (!r.date) return;
+    const k = monthKey(r.date);
+    qtyByMonth.set(k, (qtyByMonth.get(k) || 0) + r.qty);
+  });
+
+  const table = `<div class="table-scroll"><table class="data-table center-all">
+      <thead><tr><th>월</th><th class="num">불출 건수</th><th class="num">수량 합계</th></tr></thead>
+      <tbody>${counts
+        .map(
+          ([m, c]) => `<tr><td class="cell-strong">${escapeHtml(m)}</td>
+            <td class="num">${c}</td><td class="num">${(qtyByMonth.get(m) || 0).toLocaleString()}</td></tr>`
+        )
+        .join("")}</tbody>
+    </table></div>`;
+
+  const log = `<div class="table-scroll"><table class="data-table center-all">
+      <thead><tr><th>날짜</th><th class="num">수량</th><th>불출 대상</th><th>불출 여부</th></tr></thead>
+      <tbody>${rows
+        .slice()
+        .reverse()
+        .map(
+          (r) => `<tr>
+            <td>${escapeHtml(pick(r.raw, "날짜") || "-")}</td>
+            <td class="num">${r.qty}</td>
+            <td title="${escapeHtml(r.target.label)}">${escapeHtml(r.target.label || "-")}</td>
+            <td>${r.issued ? '<span class="badge done">불출 완료</span>' : '<span class="badge warn">대기</span>'}</td>
+          </tr>`
+        )
+        .join("")}</tbody>
+    </table></div>`;
+
+  openModal(
+    `${itemName} · 월별 불출량`,
+    `<p class="modal-note">총 ${rows.length}건 · 받은 크루 ${
+      new Set(rows.map((r) => r.target.label)).size
+    }명</p>
+     <div class="modal-sub">월별 불출 건수</div>
+     ${trendAreaChart(counts, "건")}
+     <div class="modal-sub" style="margin-top:22px;">월별 집계</div>
+     ${table}
+     <div class="modal-sub" style="margin-top:22px;">불출 내역</div>
+     ${log}`
+  );
+}
+
 /* --- 크루별 불출 조회 (별도 팝업) --- */
 let SOM_QUERY = "";
 let SOM_ROW = null;
@@ -1110,7 +1330,6 @@ function somModalBody() {
   }
 
   const byItem = sumBy(rows, (r) => r.item);
-  const totalQty = rows.reduce((s, r) => s + r.qty, 0);
   const pending = rows.filter((r) => !r.issued).length;
   const who = [...new Set(rows.map((r) => r.target.label))].slice(0, 4).join(", ");
 
@@ -1139,10 +1358,12 @@ function somModalBody() {
         .join("")}</tbody>
     </table></div>`;
 
-  return `<p class="modal-note">${escapeHtml(who)} · 총 ${rows.length}건 / ${totalQty.toLocaleString()}개${
+  return `<p class="modal-note">${escapeHtml(who)} · 총 ${rows.length}건${
     pending ? ` · <strong>미불출 ${pending}건</strong>` : ""
   }</p>
-    <div class="modal-sub">소모품 종류별 합계</div>
+    <div class="modal-sub">월별 불출 건수</div>
+    ${trendAreaChart(monthlyCounts(rows), "건")}
+    <div class="modal-sub" style="margin-top:22px;">소모품 종류별 합계</div>
     ${summary}
     <div class="modal-sub" style="margin-top:22px;">전체 불출 내역 (행을 누르면 상세)</div>
     ${log}`;
@@ -1201,6 +1422,21 @@ els.content.addEventListener("click", (e) => {
     SOM_MONTH = monthBtn.dataset.somMonth;
     const box = document.getElementById("somStockBox");
     if (box) box.innerHTML = somStockPanel();
+    return;
+  }
+  // 순위에서 품목 이름을 누르면 그 품목의 월별 불출량
+  const itemBtn = e.target.closest("[data-som-item]");
+  if (itemBtn) {
+    openItemModal(itemBtn.dataset.somItem);
+    return;
+  }
+  // 순위/히트맵에서 크루 이름을 누르면 그 크루의 불출 내역
+  const crewBtn = e.target.closest("[data-som-crew]");
+  if (crewBtn) {
+    SOM_QUERY = crewBtn.dataset.somCrew;
+    const input = document.getElementById("somSearch");
+    if (input) input.value = SOM_QUERY;
+    openSomModal();
   }
 });
 
@@ -1228,7 +1464,6 @@ function renderSomopum() {
   const now = new Date();
   const monthLabel = `${now.getFullYear()}년 ${now.getMonth() + 1}월`;
   const thisMonth = rows.filter((r) => isSameMonth(r.date, now));
-  const thisQty = thisMonth.reduce((s, r) => s + r.qty, 0);
   const pending = rows.filter((r) => !r.issued).length;
 
   const latest = stock.months.length ? stock.months[stock.months.length - 1] : null;
@@ -1236,31 +1471,23 @@ function renderSomopum() {
     ? latest.items.reduce((s, i) => s + (Number(i["잔여재고"] ?? i["재고수량"]) || 0), 0)
     : 0;
 
-  // 월별 불출량 추이
-  const byMonth = new Map();
-  rows.forEach((r) => {
-    if (!r.date) return;
-    const k = monthKey(r.date);
-    byMonth.set(k, (byMonth.get(k) || 0) + r.qty);
-  });
-  const monthEntries = [...byMonth.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
-  const monthMax = Math.max(...monthEntries.map(([, v]) => v), 1);
-  const monthChart = monthEntries.length
-    ? `<div class="bar-chart">${monthEntries
-        .map(
-          ([label, qty]) => `<div class="bar-row">
-            <div class="bar-label">${label}</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${Math.round((qty / monthMax) * 100)}%"></div></div>
-            <div class="bar-count">${qty.toLocaleString()}개</div>
-          </div>`
-        )
-        .join("")}</div>`
-    : `<div class="empty-note">날짜를 읽을 수 있는 기록이 없습니다.</div>`;
+  const monthCounts = monthlyCounts(rows);
+  const months = monthCounts.map(([m]) => m);
+
+  // 순위는 '건수' 기준입니다. 수량은 품목마다 단위가 달라서(묶음/개/박스) 합치면 뜻이 없어집니다.
+  const itemRank = sumBy(rows, (r) => r.item)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 12);
+  const crewRank = sumBy(rows, (r) =>
+    r.target.nick ? `${r.target.name}(${r.target.nick})` : r.target.name
+  )
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 12);
 
   return `
     <div class="kpi-grid">
       ${kpiCard("이번 달 불출", thisMonth.length + "건", monthLabel + " 기준")}
-      ${kpiCard("이번 달 불출 수량", thisQty.toLocaleString() + "개", "전 품목 합계")}
+      ${kpiCard("전체 불출 기록", rows.length + "건", "누적")}
       ${kpiCard("미불출 대기", pending + "건", "불출 여부 미체크")}
       ${kpiCard("관리 품목", (latest ? latest.items.length : 0) + "종", latest ? latest.label + " 재고 조사" : "재고 자료 없음")}
       ${kpiCard("잔여 재고 합계", remainTotal.toLocaleString() + "개", latest ? latest.label + " 기준" : "-")}
@@ -1282,6 +1509,14 @@ function renderSomopum() {
 
     <div class="panel">
       <div class="panel-header">
+        <h2>월별 불출 추이</h2>
+        <span class="panel-meta">불출 대장 날짜 기준 · 건수</span>
+      </div>
+      <div class="panel-body">${trendAreaChart(monthCounts, "건")}</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
         <h2>월별 잔여 재고</h2>
         <span class="panel-meta">월을 선택하세요</span>
       </div>
@@ -1291,40 +1526,25 @@ function renderSomopum() {
     <div class="panel">
       <div class="panel-header">
         <h2>많이 나가는 품목 순위</h2>
-        <span class="panel-meta">전체 누적 · 상위 12</span>
+        <span class="panel-meta">불출 건수 기준 · 상위 12 · 품목명을 누르면 월별 상세</span>
       </div>
-      <div class="panel-body">${rankBars(sumBy(rows, (r) => r.item).slice(0, 12), "개")}</div>
+      <div class="panel-body">${rankBars(itemRank, "data-som-item")}</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>크루별 불출 히트맵</h2>
+        <span class="panel-meta">상위 12명 · 이름을 누르면 상세 내역</span>
+      </div>
+      <div class="panel-body">${crewMonthHeatmap(rows, months)}</div>
     </div>
 
     <div class="panel">
       <div class="panel-header">
         <h2>많이 요청하는 크루 순위</h2>
-        <span class="panel-meta">전체 누적 · 상위 12</span>
+        <span class="panel-meta">불출 건수 기준 · 상위 12 · 이름을 누르면 상세 내역</span>
       </div>
-      <div class="panel-body">${rankBars(
-        sumBy(rows, (r) => (r.target.nick ? `${r.target.name}(${r.target.nick})` : r.target.name)).slice(0, 12),
-        "개"
-      )}</div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-header">
-        <h2>월별 불출량 추이</h2>
-        <span class="panel-meta">불출 대장 날짜 기준</span>
-      </div>
-      <div class="panel-body">${monthChart}</div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-header">
-        <h2>불출 대장</h2>
-        <span class="panel-meta">${rows.length}건</span>
-      </div>
-      <div class="panel-body">
-        ${renderTable(getRecords("somopum").slice().reverse(),
-          ["날짜","품목","수량","불출 대상","물품 전달 구역","불출 여부","비고(특이사항)"],
-          { detailTitle: "소모품 불출 상세", center: true })}
-      </div>
+      <div class="panel-body">${rankBars(crewRank, "data-som-crew")}</div>
     </div>
   `;
 }
@@ -1444,7 +1664,7 @@ function renderAnnual() {
         <span class="panel-meta">불출 대장 날짜 기준</span>
       </div>
       <div class="panel-body">
-        ${monthBarChart(somopum, "날짜")}
+        ${trendAreaChart(monthlyCounts(somopumRows()), "건")}
       </div>
     </div>
 
