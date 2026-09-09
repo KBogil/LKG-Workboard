@@ -22,10 +22,17 @@ const els = {
   modalTitle: document.getElementById("modalTitle"),
   modalBody: document.getElementById("modalBody"),
   modalClose: document.getElementById("modalClose"),
+  adminBadge: document.getElementById("adminBadge"),
+  refreshPill: document.getElementById("refreshPill"),
 };
 
 let ENCRYPTED_BLOB = null;
 let MAIL_MODAL_KIND = null; // 메일룸 팝업이 열려 있으면 그 대장 키
+let CURRENT_VIEW = "overview";
+
+/* 자동 갱신에 쓰려고 비밀번호를 기억해 둡니다.
+   브라우저 메모리에만 있고 저장·전송되지 않습니다 (탭을 닫으면 사라집니다). */
+let PASSPHRASE = null;
 
 /* ---------------- 암호화/복호화 유틸 ---------------- */
 
@@ -68,10 +75,13 @@ async function tryUnlock() {
   els.pinSubmit.disabled = true;
   try {
     WORKBOARD = await decryptBlob(ENCRYPTED_BLOB, pin);
+    PASSPHRASE = pin;
     els.lockOverlay.style.display = "none";
     els.appRoot.style.display = "";
     els.lastUpdated.textContent = "마지막 업데이트: " + formatDateTime(WORKBOARD.generated_at);
     renderView("overview");
+    refreshAdminBadge();
+    startAutoRefresh();
   } catch (err) {
     els.lockError.textContent = "비밀번호가 올바르지 않습니다.";
   } finally {
@@ -93,6 +103,7 @@ const VIEW_TITLES = {
   mail: "메일룸 관리",
   plant: "플랜트박스 관리",
   annual: "연간 통계",
+  admin: "관리자 알림",
 };
 
 /* ---------------- 초기화 ---------------- */
@@ -470,7 +481,9 @@ function renderView(view) {
     mail: renderMail,
     plant: renderPlant,
     annual: renderAnnual,
+    admin: renderAdmin,
   };
+  CURRENT_VIEW = view;
   TABLE_REGISTRY = {}; // 이전 화면의 표 정보는 버립니다
   closeModal();
   stopNoticeRotation();
@@ -507,6 +520,8 @@ function renderOverview() {
     </div>
 
     ${noticeBar()}
+
+    ${todoPanel()}
 
     ${schedulePanel()}
 
@@ -897,6 +912,417 @@ els.content.addEventListener("click", (e) => {
     if (item) openModal(`${item.name} · ${item.type}`, recordDetailHtml(item.raw));
   }
 });
+
+/* ---------------- 데이터 점검 · 관리자 알림 ---------------- */
+
+/* 각 시트가 제대로 읽혔는지 확인할 항목입니다.
+   need에 적은 열이 사라지면(시트 서식이 바뀌면) 화면이 조용히 비게 되므로,
+   여기서 잡아 관리자 알림으로 띄웁니다. */
+const SOURCE_CHECKS = [
+  { key: "jeonsan_status", label: "전산 업무현황", need: ["요청자", "담당자", "진행상태"] },
+  { key: "jeonsan_asset", label: "자산 지급대장", need: ["한글이름"] },
+  { key: "jeonsan_io", label: "전산 입출고 · 대여", need: ["이름"] },
+  { key: "somopum", label: "소모품 불출 대장", need: ["품목", "수량", "불출 대상"] },
+  { key: "vehicle_parking", label: "정기주차 차량", need: [] },
+  { key: "vehicle_log", label: "운행일지", need: [] },
+  { key: "mail_log", label: "우편물 대장", need: ["도달일", "수령자"] },
+  { key: "namecard", label: "인쇄물 대장", need: ["전달일"] },
+  { key: "notice", label: "공지 (시트 A~D열)", need: [] },
+  { key: "schedule", label: "팀 스케줄 (시트 F~J열)", need: ["이름", "유형"] },
+];
+
+/* 레코드에 그 열이 있는지 (이름 표기가 조금 달라도 찾습니다) */
+function hasColumn(record, want) {
+  const target = normalizeColumn(want);
+  return Object.keys(record).some((k) => normalizeColumn(k).includes(target));
+}
+
+/* 데이터가 얼마나 오래됐는지 (분) */
+function dataAgeMinutes() {
+  if (!WORKBOARD || !WORKBOARD.generated_at) return null;
+  return (Date.now() - new Date(WORKBOARD.generated_at).getTime()) / 60000;
+}
+
+/* 지금 알려야 할 문제들. 배지 숫자이자 관리자 알림 화면의 내용입니다. */
+function dataAlerts() {
+  const out = [];
+  const add = (level, title, detail) => out.push({ level, title, detail });
+
+  // ① 자동 갱신이 멈췄는지 (15분마다 도는 작업이 90분 넘게 안 돌면 이상)
+  const age = dataAgeMinutes();
+  if (age !== null && age > 90) {
+    const h = Math.floor(age / 60);
+    add(
+      "danger",
+      "데이터가 갱신되지 않고 있습니다",
+      `마지막 갱신이 약 ${h ? h + "시간 " : ""}${Math.round(age % 60)}분 전입니다. ` +
+        "GitHub Actions 실행 기록을 확인해주세요."
+    );
+  }
+
+  // ② 시트별 점검
+  SOURCE_CHECKS.forEach((c) => {
+    const rows = getRecords(c.key);
+    if (!rows.length) {
+      add("danger", `${c.label} — 읽은 기록이 0건입니다`,
+          "시트 접근 권한, 탭 삭제, gid 변경 중 하나일 수 있습니다.");
+      return;
+    }
+    const missing = c.need.filter((n) => !hasColumn(rows[0], n));
+    if (missing.length) {
+      add("warn", `${c.label} — 열 이름을 찾지 못했습니다`,
+          `찾는 열: ${missing.join(", ")} · 시트에서 열 이름이 바뀌었는지 확인해주세요.`);
+    }
+  });
+
+  // ③ 탕비실 (구조가 달라 따로 봅니다)
+  const tb = getTangbisil();
+  if (!(tb.items || []).length) {
+    add("danger", "탕비실 — 상품 목록이 비어 있습니다",
+        `이번 달 탭(${tb.month_title || "이름 확인 필요"})을 못 찾았거나 서식이 바뀌었을 수 있습니다.`);
+  } else if (!(tb.days || []).length) {
+    add("warn", "탕비실 — 일자별 진열 체크를 못 읽었습니다",
+        "시트 2~3행에 '2026-9-7(월)' 형태의 날짜가 있는지 확인해주세요.");
+  }
+
+  // ④ 소모품 월별 재고
+  const stock = somopumStock();
+  if (!stock.months.length) {
+    add("warn", "소모품 — 월별 잔여 재고를 못 읽었습니다",
+        "'월별 불출량&검수' 탭의 2행 월 표시와 3행 열 이름을 확인해주세요.");
+  }
+
+  return out;
+}
+
+/* 사이드바 배지 갱신 */
+function refreshAdminBadge() {
+  if (!els.adminBadge) return;
+  const n = dataAlerts().length;
+  els.adminBadge.textContent = n;
+  els.adminBadge.hidden = n === 0;
+}
+
+/* 관리자 알림은 간단한 번호 잠금을 둡니다.
+   번호를 코드에 그대로 적지 않으려고 지문(SHA-256)만 넣어둡니다.
+   화면 자체가 이미 대시보드 비밀번호 안쪽이라, 이 잠금은 '실수로 들어가는 것'을
+   막는 용도입니다. */
+const ADMIN_PIN_HASH =
+  "3e34b5dc434bcf3186f089d362691cfac1b17231601f2f402dc79015be878d83";
+let ADMIN_UNLOCKED = false;
+let ADMIN_ERROR = "";
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function adminLockHtml() {
+  return `<div class="panel">
+    <div class="panel-header">
+      <h2>관리자 확인</h2>
+      <span class="panel-meta">관리자 번호를 입력하세요</span>
+    </div>
+    <div class="panel-body">
+      <div class="admin-lock">
+        <p class="section-note" style="margin:0 0 14px;">
+          데이터 점검 결과는 관리자만 확인합니다.
+        </p>
+        <div class="search-bar" style="margin:0;">
+          <input type="password" id="adminPin" inputmode="numeric"
+                 placeholder="관리자 번호" autocomplete="off" />
+          <button class="crew-search-btn" id="adminPinBtn">확인</button>
+        </div>
+        ${ADMIN_ERROR ? `<p class="lock-error" style="margin-top:12px !important;">${escapeHtml(ADMIN_ERROR)}</p>` : ""}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderAdmin() {
+  if (!ADMIN_UNLOCKED) return adminLockHtml();
+
+  const alerts = dataAlerts();
+  const age = dataAgeMinutes();
+
+  const cards = alerts.length
+    ? `<div class="alert-cards">${alerts
+        .map(
+          (a) => `<div class="alert-card ${a.level}">
+            <div class="alert-card-head">
+              <span class="alert-chip ${a.level}">${a.level === "danger" ? "확인 필요" : "주의"}</span>
+              <strong>${escapeHtml(a.title)}</strong>
+            </div>
+            <p class="alert-card-body">${escapeHtml(a.detail)}</p>
+          </div>`
+        )
+        .join("")}</div>`
+    : `<div class="ok-panel" style="margin:16px 20px;">지금 확인할 문제가 없습니다. 모든 시트가 정상적으로 읽혔습니다.</div>`;
+
+  // 점검 항목을 전부 보여줍니다 (문제 없는 것도 같이 봐야 안심이 됩니다)
+  const rows = SOURCE_CHECKS.map((c) => {
+    const list = getRecords(c.key);
+    const missing = list.length ? c.need.filter((n) => !hasColumn(list[0], n)) : c.need;
+    const ok = list.length && !missing.length;
+    return `<tr>
+      <td class="cell-strong">${escapeHtml(c.label)}</td>
+      <td>${list.length.toLocaleString()}건</td>
+      <td>${
+        ok
+          ? `<span class="badge done">정상</span>`
+          : `<span class="badge warn">${list.length ? "열 확인" : "0건"}</span>`
+      }</td>
+      <td class="muted">${missing.length ? escapeHtml(missing.join(", ")) : "-"}</td>
+    </tr>`;
+  }).join("");
+
+  const tb = getTangbisil();
+
+  return `
+    <div class="kpi-grid">
+      ${kpiCard("확인 필요", alerts.filter((a) => a.level === "danger").length + "건", "바로 조치")}
+      ${kpiCard("주의", alerts.filter((a) => a.level === "warn").length + "건", "서식 확인")}
+      ${kpiCard("마지막 갱신", age === null ? "-" : `${Math.round(age)}분 전`, "15분마다 자동 갱신")}
+      ${kpiCard("점검 대상", SOURCE_CHECKS.length + "개", "시트 · 탭 기준")}
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>알림</h2>
+        <span class="panel-meta">${alerts.length}건</span>
+      </div>
+      <div class="panel-body">${cards}</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>시트 점검 결과</h2>
+        <span class="panel-meta">읽은 건수와 필수 열 확인</span>
+      </div>
+      <div class="panel-body">
+        <div class="table-scroll"><table class="data-table center-all">
+          <thead><tr><th>시트 · 대장</th><th>읽은 건수</th><th>상태</th><th>못 찾은 열</th></tr></thead>
+          <tbody>${rows}
+            <tr>
+              <td class="cell-strong">탕비실 (이번 달 탭)</td>
+              <td>${(tb.items || []).length}종</td>
+              <td>${
+                (tb.items || []).length
+                  ? `<span class="badge done">정상</span>`
+                  : `<span class="badge warn">0종</span>`
+              }</td>
+              <td class="muted">${escapeHtml(tb.month_title || "탭 이름 확인 필요")}</td>
+            </tr>
+            <tr>
+              <td class="cell-strong">소모품 월별 재고</td>
+              <td>${somopumStock().months.length}개월</td>
+              <td>${
+                somopumStock().months.length
+                  ? `<span class="badge done">정상</span>`
+                  : `<span class="badge warn">0개월</span>`
+              }</td>
+              <td class="muted">-</td>
+            </tr>
+          </tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header"><h2>점검 기준</h2></div>
+      <div class="panel-body">
+        <div class="detail-list" style="padding: 4px 20px 16px;">
+          <div class="detail-row"><div class="detail-key">0건</div>
+            <div class="detail-value">시트를 아예 못 읽었습니다. 공유 권한 · 탭 삭제 · gid 변경을 확인하세요.</div></div>
+          <div class="detail-row"><div class="detail-key">열 확인</div>
+            <div class="detail-value">시트는 읽었지만 화면이 기대하는 열 이름이 없습니다. 열 이름이 바뀌면 그 칸이 빈 채로 나옵니다.</div></div>
+          <div class="detail-row"><div class="detail-key">갱신 지연</div>
+            <div class="detail-value">마지막 갱신이 90분을 넘으면 알립니다. GitHub Actions 실행 기록을 확인하세요.</div></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* 관리자 번호 입력 처리 */
+async function tryAdminUnlock() {
+  const input = document.getElementById("adminPin");
+  if (!input) return;
+  const value = input.value.trim();
+  if (!value) return;
+  const hash = await sha256Hex(value);
+  if (hash === ADMIN_PIN_HASH) {
+    ADMIN_UNLOCKED = true;
+    ADMIN_ERROR = "";
+  } else {
+    ADMIN_ERROR = "번호가 올바르지 않습니다.";
+  }
+  els.content.innerHTML = renderAdmin();
+  if (!ADMIN_UNLOCKED) {
+    const again = document.getElementById("adminPin");
+    if (again) again.focus();
+  }
+}
+
+els.content.addEventListener("click", (e) => {
+  if (e.target.closest("#adminPinBtn")) tryAdminUnlock();
+});
+
+els.content.addEventListener("keydown", (e) => {
+  if (e.target.id === "adminPin" && e.key === "Enter") {
+    e.preventDefault();
+    tryAdminUnlock();
+  }
+});
+
+/* ---------------- 개요: 오늘 확인할 것 ---------------- */
+
+/* 각 카테고리에 흩어져 있는 '지금 손봐야 하는 것'만 모읍니다.
+   카테고리에 들어가 보지 않아도 놓치지 않게 하려는 것입니다. */
+function todoItems() {
+  const out = [];
+  const tb = getTangbisil();
+  const items = tb.items || [];
+
+  const reorder = items.filter((i) => i["발주필요"]).length;
+  if (reorder) {
+    out.push({ view: "tangbisil", level: "danger", label: "탕비실 발주 필요", count: reorder, unit: "종" });
+  }
+
+  const soon = items.filter((i) => {
+    const m = coverMonths(i);
+    return !i["발주필요"] && m !== null && m < 1;
+  }).length;
+  if (soon) {
+    out.push({ view: "tangbisil", level: "warn", label: "1개월 안에 소진 예상", count: soon, unit: "종" });
+  }
+
+  const pending = somopumRows().filter((r) => !r.issued).length;
+  if (pending) {
+    out.push({ view: "somopum", level: "warn", label: "소모품 미불출 대기", count: pending, unit: "건" });
+  }
+
+  const thisKey = monthKey(new Date());
+  const returned = mailRecords("post").filter(
+    (r) => r.date && monthKey(r.date) === thisKey && isReturned(r.raw)
+  ).length;
+  if (returned) {
+    out.push({ view: "mail", level: "danger", label: "이번 달 반송", count: returned, unit: "건" });
+  }
+
+  const ing = getRecords("jeonsan_status").filter(
+    (r) => !String(r["진행상태"] || "").includes("완료")
+  ).length;
+  if (ing) {
+    out.push({ view: "jeonsan", level: "warn", label: "전산 미완료 업무", count: ing, unit: "건" });
+  }
+
+  const alerts = dataAlerts().length;
+  if (alerts) {
+    out.push({ view: "admin", level: "danger", label: "데이터 점검 알림", count: alerts, unit: "건" });
+  }
+
+  return out;
+}
+
+function todoPanel() {
+  const list = todoItems();
+  if (!list.length) {
+    return `<div class="ok-panel">지금 확인할 것이 없습니다. 발주 · 미불출 · 반송 모두 정상입니다.</div>`;
+  }
+  return `<div class="todo-panel">
+    <div class="todo-head">
+      <strong>오늘 확인할 것</strong>
+      <span class="todo-note">누르면 해당 화면으로 이동합니다</span>
+    </div>
+    <div class="todo-grid">
+      ${list
+        .map(
+          (t) => `<button class="todo-item ${t.level}" data-go="${t.view}">
+            <span class="todo-label">${escapeHtml(t.label)}</span>
+            <span class="todo-count">${t.count}<span class="todo-unit">${t.unit}</span></span>
+          </button>`
+        )
+        .join("")}
+    </div>
+  </div>`;
+}
+
+/* 카드에서 카테고리로 이동 (사이드바 선택 표시도 같이 바뀌도록 버튼을 눌러줍니다) */
+els.content.addEventListener("click", (e) => {
+  const go = e.target.closest("[data-go]");
+  if (!go) return;
+  const btn = document.querySelector(`.nav-item[data-view="${go.dataset.go}"]`);
+  if (btn) btn.click();
+});
+
+/* ---------------- 자동 갱신 ---------------- */
+
+/* 시트는 15분마다 갱신되는데 브라우저는 새로고침해야 보였습니다.
+   5분마다 파일이 바뀌었는지만 확인하고, 바뀌었으면 화면을 다시 그립니다.
+   내용 비교는 파일 안의 content_hash로 합니다 (암호문은 매번 달라지므로). */
+const REFRESH_MS = 5 * 60 * 1000;
+let REFRESH_TIMER = null;
+let PENDING_DATA = null;
+
+function canRefreshNow() {
+  if (!els.modalBackdrop.hidden) return false; // 팝업을 보고 있는 중
+  const active = document.activeElement;
+  if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return false;
+  return true;
+}
+
+function applyUpdate() {
+  if (!PENDING_DATA) return;
+  WORKBOARD = PENDING_DATA;
+  PENDING_DATA = null;
+  if (els.refreshPill) els.refreshPill.hidden = true;
+  els.lastUpdated.textContent = "마지막 업데이트: " + formatDateTime(WORKBOARD.generated_at);
+  refreshAdminBadge();
+  renderView(CURRENT_VIEW);
+}
+
+async function checkForUpdate() {
+  if (!PASSPHRASE) return;
+  try {
+    const res = await fetch(DATA_URL, { cache: "no-store" });
+    if (!res.ok) return;
+    const blob = await res.json();
+    const same =
+      blob.content_hash && ENCRYPTED_BLOB.content_hash
+        ? blob.content_hash === ENCRYPTED_BLOB.content_hash
+        : blob.ciphertext === ENCRYPTED_BLOB.ciphertext;
+    if (same) return;
+
+    const fresh = await decryptBlob(blob, PASSPHRASE);
+    ENCRYPTED_BLOB = blob;
+    PENDING_DATA = fresh;
+
+    // 보고 있는 중이면 방해하지 않고, 위쪽에 알림만 띄웁니다.
+    if (canRefreshNow()) applyUpdate();
+    else if (els.refreshPill) els.refreshPill.hidden = false;
+  } catch (err) {
+    // 네트워크가 잠깐 끊긴 경우 등. 다음 주기에 다시 시도합니다.
+  }
+}
+
+function startAutoRefresh() {
+  if (REFRESH_TIMER) clearInterval(REFRESH_TIMER);
+  // 배지도 같이 다시 셉니다. 갱신이 멈춘 경우는 새 데이터가 없어도 알려야 하니까요.
+  REFRESH_TIMER = setInterval(() => {
+    refreshAdminBadge();
+    checkForUpdate();
+  }, REFRESH_MS);
+
+  // 다른 탭을 보다가 돌아왔을 때도 한 번 확인합니다.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkForUpdate();
+  });
+
+  if (els.refreshPill) {
+    els.refreshPill.addEventListener("click", applyUpdate);
+  }
+}
 
 /* ---------------- 플랜트박스 ---------------- */
 
@@ -2507,10 +2933,145 @@ function renderAnnual() {
       </div>
     </div>
 
+    <div class="panel">
+      <div class="panel-header">
+        <h2>전년 동월 대비</h2>
+        <span class="panel-meta">같은 달끼리 올해와 작년을 나란히 봅니다</span>
+      </div>
+      <div class="panel-body" id="yoyBox">${yoyPanel()}</div>
+    </div>
+
     <div class="empty-note" style="text-align:left; padding: 4px 4px 0;">
       탕비실 · 법인차량의 월별 그래프는 각 시트의 날짜 열 이름을 확인한 뒤 추가할 예정이에요.
     </div>
   `;
 }
+
+/* ---------------- 전년 동월 대비 ---------------- */
+
+/* 날짜 목록을 "2026.09" -> 건수 로 셉니다. */
+function monthCountMap(dates) {
+  const map = new Map();
+  dates.forEach((d) => {
+    if (!d) return;
+    const k = monthKey(d);
+    map.set(k, (map.get(k) || 0) + 1);
+  });
+  return map;
+}
+
+const YOY_SOURCES = [
+  {
+    key: "jeonsan",
+    label: "전산 업무",
+    note: "요청일자 기준",
+    dates: () =>
+      getRecords("jeonsan_status").map(
+        (r) => parseKDate(r["요청일자"]) || parseKDate(r["완료일자"])
+      ),
+  },
+  {
+    key: "somopum",
+    label: "소모품 불출",
+    note: "불출 대장 날짜 기준",
+    dates: () => somopumRows().map((r) => r.date),
+  },
+  {
+    key: "mail",
+    label: "우편물",
+    note: "도달일 기준",
+    dates: () => mailRecords("post").map((r) => r.date),
+  },
+];
+
+let YOY_TAB = "jeonsan";
+
+function yoyPanel() {
+  const src = YOY_SOURCES.find((s) => s.key === YOY_TAB) || YOY_SOURCES[0];
+  const map = monthCountMap(src.dates());
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const pad = (n) => String(n).padStart(2, "0");
+
+  // 이번 달까지만 봅니다. 아직 오지 않은 달을 0으로 그리면 실적이 떨어진 것처럼 보입니다.
+  let rows = [];
+  for (let mo = 1; mo <= now.getMonth() + 1; mo++) {
+    rows.push({
+      month: mo,
+      cur: map.get(`${year}.${pad(mo)}`) || 0,
+      prev: map.get(`${year - 1}.${pad(mo)}`) || 0,
+    });
+  }
+  // 기록이 시작되기 전의 빈 달은 지웁니다 (0으로 채운 줄이 앞에 쌓이면 읽기 어렵습니다)
+  const first = rows.findIndex((r) => r.cur > 0 || r.prev > 0);
+  rows = first === -1 ? rows.slice(-1) : rows.slice(first);
+
+  const tabs = YOY_SOURCES.map(
+    (s) => `<button class="month-tab ${s.key === YOY_TAB ? "active" : ""}"
+      data-yoy="${s.key}">${escapeHtml(s.label)}</button>`
+  ).join("");
+
+  const hasPrev = rows.some((r) => r.prev > 0);
+  const max = Math.max(...rows.flatMap((r) => [r.cur, r.prev]), 1);
+  const w = (v) => (v ? Math.max((v / max) * 100, 2) : 0);
+
+  const body = rows
+    .map((r) => {
+      const diff = r.cur - r.prev;
+      let delta = "-";
+      let cls = "muted";
+      if (r.prev > 0) {
+        cls = diff > 0 ? "up" : diff < 0 ? "down" : "";
+        delta = `${diff > 0 ? "+" : ""}${diff}`;
+      } else if (hasPrev && r.cur > 0) {
+        // 다른 달에는 작년 기록이 있는데 이 달만 없는 경우
+        delta = "작년 없음";
+      }
+      const pct = r.prev > 0 ? ` (${Math.round((diff / r.prev) * 100)}%)` : "";
+      // 작년 자료가 아예 없으면 아랫줄을 그리지 않습니다 (0만 늘어서면 읽기 어렵습니다)
+      const prevLine = hasPrev
+        ? `<div class="yoy-line">
+            <span class="yoy-bar prev" style="width:${w(r.prev)}%"></span>
+            <span class="yoy-num muted">${r.prev}</span>
+          </div>`
+        : "";
+      return `<div class="yoy-row">
+        <div class="yoy-month">${r.month}월</div>
+        <div class="yoy-bars">
+          <div class="yoy-line">
+            <span class="yoy-bar cur" style="width:${w(r.cur)}%"></span>
+            <span class="yoy-num">${r.cur}</span>
+          </div>
+          ${prevLine}
+        </div>
+        <div class="yoy-delta ${cls}" title="${escapeHtml(delta + pct)}">${escapeHtml(delta)}</div>
+      </div>`;
+    })
+    .join("");
+
+  const legend = `<div class="chart-legend" style="padding:12px 20px 4px;">
+    <span class="legend-item"><span class="legend-swatch yoy-cur"></span>${year}년</span>
+    ${hasPrev ? `<span class="legend-item"><span class="legend-swatch yoy-prev"></span>${year - 1}년</span>` : ""}
+    <span class="legend-item muted">${escapeHtml(src.note)}</span>
+  </div>`;
+
+  const notice = hasPrev
+    ? ""
+    : `<div class="empty-note" style="text-align:left; padding:6px 20px 0;">
+        ${year - 1}년 자료가 아직 없습니다. 해가 넘어가면 이 자리에 전년 동월 비교가 채워집니다.
+      </div>`;
+
+  return `<div class="month-tabs">${tabs}</div>${legend}${notice}
+    <div class="yoy-chart">${body}</div>`;
+}
+
+els.content.addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-yoy]");
+  if (!tab) return;
+  YOY_TAB = tab.dataset.yoy;
+  const box = document.getElementById("yoyBox");
+  if (box) box.innerHTML = yoyPanel();
+});
 
 init();
