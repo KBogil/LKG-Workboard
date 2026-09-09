@@ -492,20 +492,42 @@ function renderView(view) {
   if (view === "overview") startNoticeRotation();
 }
 
+/* 이번 달 건수를 셉니다. 각 대장의 실제 날짜 열 이름을 넘겨받습니다.
+   어떤 행에서도 날짜를 못 읽으면 null을 돌려줍니다.
+   (예전에는 이 경우 '전체 건수'로 넘어가서, 월 기준이라면서 누적 숫자를 보여줬습니다) */
+function countThisMonth(records, ...fields) {
+  const now = new Date();
+  let readable = false;
+  const n = records.filter((r) => {
+    for (const f of fields) {
+      const d = parseKDate(pick(r, f));
+      if (d) {
+        readable = true;
+        return isSameMonth(d, now);
+      }
+    }
+    return false;
+  }).length;
+  if (!records.length) return 0;
+  return readable ? n : null;
+}
+
+function countLabel(n) {
+  return n === null ? "-" : n + "건";
+}
+
 function renderOverview() {
-  const jeonsanAll = getRecords("jeonsan_status");
-  const jeonsan = filterCurrentMonthJeonsan(jeonsanAll);
-  const tangbisil = getTangbisil();
-  const somopumAll = getRecords("somopum");
-  const vehicleLogAll = getRecords("vehicle_log");
-  const mailAll = getRecords("mail_log");
-
-  const somopum = filterCurrentMonthGeneric(somopumAll);
-  const vehicleLog = filterCurrentMonthGeneric(vehicleLogAll);
-  const mail = filterCurrentMonthGeneric(mailAll);
-
   const now = new Date();
   const monthLabel = `${now.getFullYear()}년 ${now.getMonth() + 1}월`;
+
+  const tangbisil = getTangbisil();
+  const jeonsanCount = countThisMonth(getRecords("jeonsan_status"), "요청일자", "완료일자");
+  const somopumCount = countThisMonth(getRecords("somopum"), "날짜");
+  const vehicleCount = countThisMonth(getRecords("vehicle_log"), "운행일", "이용일", "일자", "날짜");
+  const postCount = countThisMonth(getRecords("mail_log"), "도달일");
+  const printCount = countThisMonth(getRecords("namecard"), "전달일");
+  const mailCount =
+    postCount === null && printCount === null ? null : (postCount || 0) + (printCount || 0);
 
   return `
     <div class="banner-row">
@@ -521,23 +543,21 @@ function renderOverview() {
 
     ${noticeBar()}
 
-    ${todoPanel()}
-
-    ${schedulePanel()}
-
     <h2 class="section-title">직무별 업무 처리 현황</h2>
-    <p class="section-note">${monthLabel} 기준</p>
+    <p class="section-note">${monthLabel} 한 달 동안 처리된 건수입니다.</p>
     <div class="owner-grid">
-      ${ownerCard("전산", "이재환(Jetty)", jeonsan.length + "건")}
+      ${ownerCard("전산", "이재환(Jetty)", countLabel(jeonsanCount))}
       ${ownerCard(
         "탕비실",
         "박동국(Kaju)",
         tangbisil.workdays_total ? `${tangbisil.workdays_done} / ${tangbisil.workdays_total}일` : "-"
       )}
-      ${ownerCard("소모품", "박동국(Kaju)", (somopum === null ? somopumAll : somopum).length + "건")}
-      ${ownerCard("법인차량", "박동국(Kaju)", (vehicleLog === null ? vehicleLogAll : vehicleLog).length + "건")}
-      ${ownerCard("메일룸", "박동국(Kaju)", (mail === null ? mailAll : mail).length + "건")}
+      ${ownerCard("소모품", "박동국(Kaju)", countLabel(somopumCount))}
+      ${ownerCard("법인차량", "박동국(Kaju)", countLabel(vehicleCount))}
+      ${ownerCard("메일룸", "박동국(Kaju)", countLabel(mailCount))}
     </div>
+
+    ${schedulePanel()}
   `;
 }
 
@@ -731,6 +751,26 @@ function dayLabel(d) {
 let SCHED_YEAR = null;
 let SCHED_MONTH = null;
 let SCHED_VISIBLE = []; // 지금 화면에 그려진 일정 (막대 클릭용)
+let SCHED_PICK = false; // 연·월 선택창을 펼쳤는지
+let SCHED_PICK_YEAR = null; // 선택창에서 보고 있는 해
+
+/* 연·월 선택창. 제목을 누르면 펼쳐집니다.
+   화살표로 한 달씩 넘기지 않고 다른 해로도 바로 갈 수 있게 하려는 것입니다. */
+function schedulePicker() {
+  if (!SCHED_PICK) return "";
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const on = SCHED_PICK_YEAR === SCHED_YEAR && i === SCHED_MONTH;
+    return `<button class="cal-pick-m${on ? " active" : ""}" data-sched-month="${i}">${i + 1}월</button>`;
+  }).join("");
+  return `<div class="cal-picker">
+    <div class="cal-picker-year">
+      <button class="cal-nav-btn" data-sched-year="-1" aria-label="이전 해">◀</button>
+      <span class="cal-picker-y">${SCHED_PICK_YEAR}년</span>
+      <button class="cal-nav-btn" data-sched-year="1" aria-label="다음 해">▶</button>
+    </div>
+    <div class="cal-picker-months">${months}</div>
+  </div>`;
+}
 
 function scheduleCalendar() {
   // 일정이 하나도 없어도 달력은 그대로 띄웁니다.
@@ -869,7 +909,11 @@ function scheduleCalendar() {
   return `
     <div class="cal-nav">
       <button class="cal-nav-btn" data-sched-nav="prev" aria-label="지난달">◀</button>
-      <span class="cal-title">${SCHED_YEAR}년 ${SCHED_MONTH + 1}월</span>
+      <div class="cal-title-wrap">
+        <button class="cal-title" data-sched-pick aria-expanded="${SCHED_PICK}"
+                title="누르면 연·월을 골라서 이동합니다">${SCHED_YEAR}년 ${SCHED_MONTH + 1}월 <span class="cal-caret">▾</span></button>
+        ${schedulePicker()}
+      </div>
       <button class="cal-nav-btn" data-sched-nav="next" aria-label="다음달">▶</button>
       <button class="cal-nav-btn cal-today-btn" data-sched-nav="today">오늘</button>
       <span class="cal-note">오늘 일정 ${todayCount}건 · 막대를 누르면 상세</span>
@@ -879,7 +923,8 @@ function scheduleCalendar() {
 }
 
 function schedulePanel() {
-  return `<div class="panel">
+  // panel-open: 연·월 선택창이 패널 밖으로 나올 수 있게 잘림을 풀어줍니다
+  return `<div class="panel panel-open">
     <div class="panel-header">
       <h2>팀 스케줄</h2>
       <span class="panel-meta">연차 · 외근 · 재택 등 크루별 일정</span>
@@ -888,7 +933,38 @@ function schedulePanel() {
   </div>`;
 }
 
+function redrawCalendar() {
+  const box = document.getElementById("schedBox");
+  if (box) box.innerHTML = scheduleCalendar();
+}
+
 els.content.addEventListener("click", (e) => {
+  // 제목을 눌러 연·월 선택창 열기/닫기
+  if (e.target.closest("[data-sched-pick]")) {
+    SCHED_PICK = !SCHED_PICK;
+    if (SCHED_PICK) SCHED_PICK_YEAR = SCHED_YEAR;
+    redrawCalendar();
+    return;
+  }
+
+  // 선택창에서 해 바꾸기
+  const yearBtn = e.target.closest("[data-sched-year]");
+  if (yearBtn) {
+    SCHED_PICK_YEAR += Number(yearBtn.dataset.schedYear);
+    redrawCalendar();
+    return;
+  }
+
+  // 선택창에서 달 고르기
+  const monthBtn = e.target.closest("[data-sched-month]");
+  if (monthBtn) {
+    SCHED_YEAR = SCHED_PICK_YEAR;
+    SCHED_MONTH = Number(monthBtn.dataset.schedMonth);
+    SCHED_PICK = false;
+    redrawCalendar();
+    return;
+  }
+
   const nav = e.target.closest("[data-sched-nav]");
   if (nav) {
     const now = new Date();
@@ -898,18 +974,26 @@ els.content.addEventListener("click", (e) => {
       SCHED_YEAR = now.getFullYear();
       SCHED_MONTH = now.getMonth();
     }
-    // 12월 다음은 다음 해 1월이 되도록 정리합니다
+    // 12월 다음은 다음 해 1월이 되도록 정리합니다 (해가 바뀌어도 계속 넘어갑니다)
     const norm = new Date(SCHED_YEAR, SCHED_MONTH, 1);
     SCHED_YEAR = norm.getFullYear();
     SCHED_MONTH = norm.getMonth();
-    const box = document.getElementById("schedBox");
-    if (box) box.innerHTML = scheduleCalendar();
+    SCHED_PICK = false;
+    redrawCalendar();
     return;
   }
+
   const bar = e.target.closest("[data-sched-row]");
   if (bar) {
     const item = SCHED_VISIBLE[Number(bar.dataset.schedRow)];
     if (item) openModal(`${item.name} · ${item.type}`, recordDetailHtml(item.raw));
+    return;
+  }
+
+  // 선택창 바깥을 누르면 닫습니다
+  if (SCHED_PICK && !e.target.closest(".cal-picker")) {
+    SCHED_PICK = false;
+    redrawCalendar();
   }
 });
 
@@ -1173,87 +1257,6 @@ els.content.addEventListener("keydown", (e) => {
     e.preventDefault();
     tryAdminUnlock();
   }
-});
-
-/* ---------------- 개요: 오늘 확인할 것 ---------------- */
-
-/* 각 카테고리에 흩어져 있는 '지금 손봐야 하는 것'만 모읍니다.
-   카테고리에 들어가 보지 않아도 놓치지 않게 하려는 것입니다. */
-function todoItems() {
-  const out = [];
-  const tb = getTangbisil();
-  const items = tb.items || [];
-
-  const reorder = items.filter((i) => i["발주필요"]).length;
-  if (reorder) {
-    out.push({ view: "tangbisil", level: "danger", label: "탕비실 발주 필요", count: reorder, unit: "종" });
-  }
-
-  const soon = items.filter((i) => {
-    const m = coverMonths(i);
-    return !i["발주필요"] && m !== null && m < 1;
-  }).length;
-  if (soon) {
-    out.push({ view: "tangbisil", level: "warn", label: "1개월 안에 소진 예상", count: soon, unit: "종" });
-  }
-
-  const pending = somopumRows().filter((r) => !r.issued).length;
-  if (pending) {
-    out.push({ view: "somopum", level: "warn", label: "소모품 미불출 대기", count: pending, unit: "건" });
-  }
-
-  const thisKey = monthKey(new Date());
-  const returned = mailRecords("post").filter(
-    (r) => r.date && monthKey(r.date) === thisKey && isReturned(r.raw)
-  ).length;
-  if (returned) {
-    out.push({ view: "mail", level: "danger", label: "이번 달 반송", count: returned, unit: "건" });
-  }
-
-  const ing = getRecords("jeonsan_status").filter(
-    (r) => !String(r["진행상태"] || "").includes("완료")
-  ).length;
-  if (ing) {
-    out.push({ view: "jeonsan", level: "warn", label: "전산 미완료 업무", count: ing, unit: "건" });
-  }
-
-  const alerts = dataAlerts().length;
-  if (alerts) {
-    out.push({ view: "admin", level: "danger", label: "데이터 점검 알림", count: alerts, unit: "건" });
-  }
-
-  return out;
-}
-
-function todoPanel() {
-  const list = todoItems();
-  if (!list.length) {
-    return `<div class="ok-panel">지금 확인할 것이 없습니다. 발주 · 미불출 · 반송 모두 정상입니다.</div>`;
-  }
-  return `<div class="todo-panel">
-    <div class="todo-head">
-      <strong>오늘 확인할 것</strong>
-      <span class="todo-note">누르면 해당 화면으로 이동합니다</span>
-    </div>
-    <div class="todo-grid">
-      ${list
-        .map(
-          (t) => `<button class="todo-item ${t.level}" data-go="${t.view}">
-            <span class="todo-label">${escapeHtml(t.label)}</span>
-            <span class="todo-count">${t.count}<span class="todo-unit">${t.unit}</span></span>
-          </button>`
-        )
-        .join("")}
-    </div>
-  </div>`;
-}
-
-/* 카드에서 카테고리로 이동 (사이드바 선택 표시도 같이 바뀌도록 버튼을 눌러줍니다) */
-els.content.addEventListener("click", (e) => {
-  const go = e.target.closest("[data-go]");
-  if (!go) return;
-  const btn = document.querySelector(`.nav-item[data-view="${go.dataset.go}"]`);
-  if (btn) btn.click();
 });
 
 /* ---------------- 자동 갱신 ---------------- */
