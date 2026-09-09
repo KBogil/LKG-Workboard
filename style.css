@@ -1769,3 +1769,102 @@ table.data-table tbody tr.row-alert:hover td {
 }
 
 .notice-card-text a { color: var(--accent); text-underline-offset: 3px; }
+
+/* ---------- 탕비실: 재고 요약 띠 ---------- */
+/* 전체 품목 중 발주가 필요한 비중을 한 줄로 봅니다.
+   색만으로 읽지 않도록 아래에 종 수를 같이 적습니다. */
+.stock-summary {
+  padding: 16px 20px 4px;
+}
+
+.ss-bar {
+  display: flex;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-soft);
+}
+
+.ss-seg.ok { background: var(--accent); }
+.ss-seg.need { background: var(--warn); }
+
+.ss-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 9px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.ss-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+.ss-dot.ok { background: var(--accent); }
+.ss-dot.need { background: var(--warn); }
+
+/* ---------- 탕비실: 재고 소진 예상 ---------- */
+.cover-block {
+  margin: 16px 20px 4px;
+  padding: 14px 0 4px;
+  border-top: 1px solid var(--border);
+}
+
+.cover-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+}
+
+.cover-note { font-size: 11.5px; color: var(--text-soft); }
+
+.cover-block .bar-chart { padding: 4px 0 0; }
+
+/* 품목명이 길어서 왼쪽 칸을 넓게 씁니다 */
+.cover-block .bar-row {
+  grid-template-columns: minmax(150px, 30%) 1fr 100px;
+}
+
+.cover-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.cover-fill.danger { background: var(--danger); }
+.cover-fill.warn { background: var(--warn); }
+.cover-fill.ok { background: var(--accent); }
+
+.legend-swatch.cover {
+  width: 16px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.legend-swatch.cover.danger { background: var(--danger); }
+.legend-swatch.cover.warn { background: var(--warn); }
+.legend-swatch.cover.ok { background: var(--accent); }
+
+/* ---------- 팝업 안의 월별 표 ---------- */
+/* 지금 보고 있는 달과 합계 줄을 구분해 줍니다. */
+table.data-table tbody tr.row-current td {
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+table.data-table tbody tr.row-total td {
+  border-top: 2px solid var(--border);
+  font-weight: 700;
+  background: var(--surface-soft);
+}
+
+/* 상세 팝업에서 증감 값에도 표와 같은 색을 씁니다. */
+.detail-value.delta.up { color: var(--delta-up); font-weight: 700; }
+.detail-value.delta.down { color: var(--delta-down); font-weight: 700; }
