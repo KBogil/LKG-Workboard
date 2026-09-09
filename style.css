@@ -1809,8 +1809,22 @@ table.data-table tbody tr.row-alert:hover td {
 .dot.ok { background: var(--accent); }
 .dot.none { background: transparent; border: 1.5px solid var(--border); }
 
-/* 소진 예상 칸: 작은 막대 + 숫자 */
-.stock-table th.cover-th { width: 230px; }
+/* 품목명은 점과 함께 가운데로 모읍니다 */
+.stock-name {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 열 너비: 숫자·상태 칸은 필요한 만큼만 쓰고, 남는 폭은 소진 예상 그래프에 줍니다. */
+.stock-table { table-layout: fixed; }
+.stock-table th.col-name { width: 30%; }
+.stock-table th.cover-th { width: auto; }
+.stock-table th.col-stock { width: 110px; }
+.stock-table th.col-status { width: 110px; }
 
 /* td 자체를 flex로 만들면 표 레이아웃이 흐트러져서, 안에 한 겹 감쌉니다. */
 .stock-table td.cover-cell { max-width: none; }
@@ -1818,13 +1832,13 @@ table.data-table tbody tr.row-alert:hover td {
 .cover-wrap {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .cover-mini {
   flex: 1;
-  min-width: 60px;
-  height: 8px;
+  min-width: 80px;
+  height: 10px;
   border-radius: 999px;
   background: var(--surface-soft);
   overflow: hidden;
@@ -1853,10 +1867,14 @@ table.data-table tbody tr.row-alert:hover td {
 
 .cover-text.muted { color: var(--text-soft); font-weight: 400; }
 
+/* 팝업 상세의 흐린 보조 문구 */
+.detail-value .muted { color: var(--text-soft); }
+
 /* 화면이 좁으면 막대를 숨기고 숫자만 남깁니다 */
 @media (max-width: 760px) {
   .cover-mini { display: none; }
-  .stock-table th.cover-th { width: auto; }
+  .stock-table { table-layout: auto; }
+  .stock-table th.col-name { width: auto; }
 }
 
 /* ---------- 팝업 안의 월별 표 ---------- */
@@ -1875,5 +1893,3 @@ table.data-table tbody tr.row-total td {
 /* 상세 팝업에서 증감 값에도 표와 같은 색을 씁니다. */
 .detail-value.delta.up { color: var(--delta-up); font-weight: 700; }
 .detail-value.delta.down { color: var(--delta-down); font-weight: 700; }
-/* 팝업 상세의 흐린 보조 문구 */
-.detail-value .muted { color: var(--text-soft); }
