@@ -1331,9 +1331,13 @@ function renderTangbisil() {
     <div class="panel">
       <div class="panel-header">
         <h2>재고 현황</h2>
-        <span class="panel-meta">${items.length}종</span>
+        <span class="panel-meta">${items.length}종 · 품목을 누르면 사용량 · 입고량 · 전월 재고</span>
       </div>
-      <div class="panel-body">${stockTable(items)}</div>
+      <div class="panel-body">
+        ${stockSummaryBar(items)}
+        ${stockCoverChart(items)}
+        ${stockTable(items)}
+      </div>
     </div>
 
     <div class="panel">
@@ -1346,51 +1350,150 @@ function renderTangbisil() {
   `;
 }
 
-/* 재고 표. 발주 필요 행은 배지와 배경으로 색 없이도 구분되게 합니다. */
+/* 이번 달 쓰는 속도로 지금 재고가 몇 달이나 갈지 봅니다.
+   (잔여 재고 ÷ 이번 달 사용량). 이번 달에 안 쓴 품목은 계산하지 않습니다. */
+function coverMonths(item) {
+  const use = Number(item["사용량"]) || 0;
+  const stock = Number(item["현재고"]);
+  if (!use || !Number.isFinite(stock)) return null;
+  return stock / use;
+}
+
+function coverBand(months) {
+  if (months < 1) return { cls: "danger", label: "1개월 미만" };
+  if (months < 2) return { cls: "warn", label: "2개월 미만" };
+  return { cls: "ok", label: "여유" };
+}
+
+/* 정상 / 발주 필요 비율을 한 줄 띠로. 숫자를 같이 적어 색만으로 읽지 않게 합니다. */
+function stockSummaryBar(items) {
+  if (!items.length) return "";
+  const need = items.filter((i) => i["발주필요"]).length;
+  const ok = items.length - need;
+  const pct = (n) => (items.length ? (n / items.length) * 100 : 0);
+  return `<div class="stock-summary">
+    <div class="ss-bar">
+      <div class="ss-seg ok" style="width:${pct(ok)}%" title="정상 ${ok}종"></div>
+      <div class="ss-seg need" style="width:${pct(need)}%" title="발주 필요 ${need}종"></div>
+    </div>
+    <div class="ss-legend">
+      <span class="legend-item"><span class="ss-dot ok"></span>정상 ${ok}종</span>
+      <span class="legend-item"><span class="ss-dot need"></span>발주 필요 ${need}종</span>
+    </div>
+  </div>`;
+}
+
+/* 소진이 임박한 순서로 보여줍니다. 표의 '발주 필요'가 지금 상태라면,
+   이 그래프는 '곧 발주가 필요해질 품목'을 미리 보여주는 쪽입니다. */
+function stockCoverChart(items) {
+  const list = items
+    .map((i) => ({ item: i, months: coverMonths(i) }))
+    .filter((x) => x.months !== null)
+    .sort((a, b) => a.months - b.months)
+    .slice(0, 8);
+
+  if (!list.length) return "";
+
+  const CAP = 6; // 6개월 넘게 남은 품목은 막대를 꽉 채웁니다
+  const rows = list
+    .map(({ item, months }) => {
+      const band = coverBand(months);
+      const width = Math.max(Math.min(months / CAP, 1) * 100, 3);
+      const text = months >= CAP ? "6개월 이상" : `약 ${months.toFixed(1)}개월치`;
+      return `<div class="bar-row">
+        <button class="bar-link" data-tb-name="${escapeHtml(item["상품명"])}" title="${escapeHtml(item["상품명"])} 상세 보기">${escapeHtml(item["상품명"])}</button>
+        <div class="bar-track"><div class="cover-fill ${band.cls}" style="width:${width}%"></div></div>
+        <div class="bar-count">${text}</div>
+      </div>`;
+    })
+    .join("");
+
+  return `<div class="cover-block">
+    <div class="cover-head">
+      <strong>재고 소진 예상 (임박 순)</strong>
+      <span class="cover-note">잔여 재고 ÷ 이번 달 사용량 · 이번 달에 사용된 품목만</span>
+    </div>
+    <div class="chart-legend">
+      <span class="legend-item"><span class="legend-swatch cover danger"></span>1개월 미만</span>
+      <span class="legend-item"><span class="legend-swatch cover warn"></span>2개월 미만</span>
+      <span class="legend-item"><span class="legend-swatch cover ok"></span>여유</span>
+    </div>
+    <div class="bar-chart">${rows}</div>
+  </div>`;
+}
+
+/* 화면에 그린 재고 표의 품목을 팝업에서 다시 찾기 위해 보관합니다. */
+let TB_ITEMS = [];
+
+/* 재고 표. 기본 화면에는 품목 · 잔여 재고 · 상태만 두고,
+   사용량 · 입고량 · 전월 재고는 품목을 눌렀을 때 팝업으로 보여줍니다. */
 function stockTable(items) {
   if (!items.length) {
     return `<div class="empty-note">탕비실 데이터를 불러오지 못했습니다.</div>`;
   }
-  const head = [
-    { label: "상품명", num: false },
-    { label: "박스당 개입수", num: true },
-    { label: "사용량", num: true },
-    { label: "입고량", num: true },
-    { label: "잔여 재고", num: true },
-    { label: "전월 재고", num: true },
-    { label: "전월 대비", num: true },
-    { label: "상태", num: false },
-  ];
+  TB_ITEMS = items;
   const rows = items
-    .map((i) => {
-      const delta = i["사용량증감"];
-      const deltaText =
-        typeof delta === "number" ? (delta > 0 ? `+${delta}` : String(delta)) : "-";
-      const deltaClass =
-        typeof delta === "number" && delta !== 0 ? (delta > 0 ? "up" : "down") : "";
+    .map((i, idx) => {
       const need = i["발주필요"];
       const badge = need
         ? `<span class="badge warn">발주 필요</span>`
         : `<span class="badge done">정상</span>`;
-      return `<tr class="${need ? "row-alert" : ""}">
+      return `<tr class="row-clickable ${need ? "row-alert" : ""}" data-tb-row="${idx}">
         <td class="cell-strong" title="${escapeHtml(i["상품명"])}">${escapeHtml(i["상품명"])}</td>
-        <td class="num">${escapeHtml(i["박스당개입수"] ?? "-")}</td>
-        <td class="num">${escapeHtml(i["사용량"] ?? "-")}</td>
-        <td class="num">${escapeHtml(i["입고량"] ?? "-")}</td>
         <td class="num cell-stock ${need ? "danger" : ""}">${escapeHtml(i["현재고"] ?? "-")}</td>
-        <td class="num muted">${escapeHtml(i["전월재고"] ?? "-")}</td>
-        <td class="num delta ${deltaClass}">${deltaText}</td>
         <td>${badge}</td>
       </tr>`;
     })
     .join("");
-  return `<div class="table-scroll"><table class="data-table stock-table">
-    <thead><tr>${head
-      .map((h) => `<th class="${h.num ? "num" : ""}">${h.label}</th>`)
-      .join("")}</tr></thead>
+  return `<div class="table-hint">품목을 누르면 사용량 · 입고량 · 전월 재고를 볼 수 있습니다.</div>
+    <div class="table-scroll"><table class="data-table stock-table">
+    <thead><tr><th>상품명</th><th class="num">잔여 재고</th><th>상태</th></tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }
+
+/* 탕비실 품목 상세 팝업 */
+function openTangbisilItem(item) {
+  if (!item) return;
+  const delta = item["사용량증감"];
+  const deltaText =
+    typeof delta === "number" ? (delta > 0 ? `+${delta}` : String(delta)) : "-";
+  const months = coverMonths(item);
+  const coverText =
+    months === null ? "-" : months >= 6 ? "6개월 이상" : `약 ${months.toFixed(1)}개월치`;
+  const need = item["발주필요"];
+
+  const line = (k, v, cls) =>
+    `<div class="detail-row"><div class="detail-key">${k}</div>
+      <div class="detail-value ${cls || ""}">${v}</div></div>`;
+
+  openModal(
+    item["상품명"],
+    `<div class="modal-kpi">
+       ${kpiCard("잔여 재고", numText(item["현재고"]) + "개", need ? "발주 필요" : "정상")}
+       ${kpiCard("이번 달 사용량", numText(item["사용량"]) + "개")}
+       ${kpiCard("이번 달 입고량", numText(item["입고량"]) + "개")}
+     </div>
+     <div class="detail-list">
+       ${line("전월 재고", numText(item["전월재고"]))}
+       ${line("전월 사용량", numText(item["전월사용량"]))}
+       ${line("전월 대비 사용량", deltaText,
+              typeof delta === "number" && delta !== 0 ? (delta > 0 ? "delta up" : "delta down") : "")}
+       ${line("박스당 개입수", numText(item["박스당개입수"]))}
+       ${line("재고 소진 예상", coverText)}
+     </div>`
+  );
+}
+
+els.content.addEventListener("click", (e) => {
+  const byName = e.target.closest("[data-tb-name]");
+  if (byName) {
+    openTangbisilItem(TB_ITEMS.find((i) => i["상품명"] === byName.dataset.tbName));
+    return;
+  }
+  const row = e.target.closest("tr[data-tb-row]");
+  if (row) openTangbisilItem(TB_ITEMS[Number(row.dataset.tbRow)]);
+});
 
 /* ---------------- 소모품 ---------------- */
 
@@ -1630,25 +1733,18 @@ function somStockPanel() {
     .join("");
 
   const items = cur.items;
-  const totalRemain = items.reduce(
-    (s, i) => s + (Number(i["잔여재고"] ?? i["재고수량"]) || 0), 0
-  );
+  const totalRemain = items.reduce((s, i) => s + (Number(i["잔여재고"]) || 0), 0);
 
+  // 기본 화면에는 품목과 잔여 재고만. 나머지(불출량 · 입고량)는 품목을 눌러 봅니다.
   const body = items.length
-    ? `<div class="table-scroll"><table class="data-table center-all">
-        <thead><tr>
-          <th>품목</th><th class="num">잔여 재고</th><th class="num">실물 재고</th>
-          <th class="num">상시 재고수량</th><th class="num">입고 수량</th><th class="num">불출량</th>
-        </tr></thead>
+    ? `<div class="table-hint">품목을 누르면 그 품목의 불출량 · 입고량을 볼 수 있습니다.</div>
+      <div class="table-scroll"><table class="data-table center-all">
+        <thead><tr><th>품목</th><th class="num">잔여 재고</th></tr></thead>
         <tbody>${items
           .map(
-            (i) => `<tr>
+            (i) => `<tr class="row-clickable" data-som-stock="${escapeHtml(i["품목"])}">
               <td class="cell-strong">${escapeHtml(i["품목"])}</td>
-              <td class="num">${numText(i["잔여재고"])}</td>
-              <td class="num">${numText(i["실물재고"])}</td>
-              <td class="num">${numText(i["재고수량"])}</td>
-              <td class="num">${numText(i["입고수량"])}</td>
-              <td class="num">${numText(i["불출량"] ?? i["검수불출량"])}</td>
+              <td class="num cell-stock">${numText(i["잔여재고"])}</td>
             </tr>`
           )
           .join("")}</tbody>
@@ -1658,6 +1754,48 @@ function somStockPanel() {
   return `<div class="month-tabs">${tabs}</div>
     <div class="month-summary">${escapeHtml(cur.label)} · 품목 ${items.length}종 · 잔여 재고 합계 ${totalRemain.toLocaleString()}개</div>
     ${body}`;
+}
+
+/* 재고 표에서 품목을 눌렀을 때: 그 품목의 월별 불출량 · 입고량만 보여줍니다. */
+function openStockItemModal(name) {
+  const stock = somopumStock();
+  const rows = stock.months
+    .map((m) => ({ label: m.label, item: m.items.find((i) => i["품목"] === name) }))
+    .filter((r) => r.item);
+
+  if (!rows.length) {
+    openModal(name, `<div class="empty-note">기록이 없습니다.</div>`);
+    return;
+  }
+
+  const cur = rows.find((r) => r.label === SOM_MONTH) || rows[rows.length - 1];
+  const sum = (field) => rows.reduce((s, r) => s + (Number(r.item[field]) || 0), 0);
+
+  openModal(
+    `${name} · 불출량 · 입고량`,
+    `<div class="modal-kpi">
+       ${kpiCard("불출량", numText(cur.item["불출량"]) + "개", cur.label)}
+       ${kpiCard("입고량", numText(cur.item["입고수량"]) + "개", cur.label)}
+       ${kpiCard("잔여 재고", numText(cur.item["잔여재고"]) + "개", cur.label + " 기준")}
+     </div>
+     <div class="modal-sub">월별</div>
+     <div class="table-scroll"><table class="data-table center-all">
+       <thead><tr><th>월</th><th class="num">불출량</th><th class="num">입고량</th></tr></thead>
+       <tbody>${rows
+         .map(
+           (r) => `<tr${r.label === cur.label ? ' class="row-current"' : ""}>
+             <td class="cell-strong">${escapeHtml(r.label)}</td>
+             <td class="num">${numText(r.item["불출량"])}</td>
+             <td class="num">${numText(r.item["입고수량"])}</td>
+           </tr>`
+         )
+         .join("")}
+         <tr class="row-total"><td class="cell-strong">합계</td>
+           <td class="num">${sum("불출량").toLocaleString()}</td>
+           <td class="num">${sum("입고수량").toLocaleString()}</td></tr>
+       </tbody>
+     </table></div>`
+  );
 }
 
 /* 월별 불출 '건수'를 [["2026.09", 12], ...] 형태로 만듭니다. */
@@ -1839,6 +1977,12 @@ els.content.addEventListener("click", (e) => {
     if (box) box.innerHTML = somStockPanel();
     return;
   }
+  // 월별 잔여 재고 표에서 품목을 누르면 불출량 · 입고량
+  const stockRow = e.target.closest("tr[data-som-stock]");
+  if (stockRow) {
+    openStockItemModal(stockRow.dataset.somStock);
+    return;
+  }
   // 순위에서 품목 이름을 누르면 그 품목의 월별 불출량
   const itemBtn = e.target.closest("[data-som-item]");
   if (itemBtn) {
@@ -1883,7 +2027,7 @@ function renderSomopum() {
 
   const latest = stock.months.length ? stock.months[stock.months.length - 1] : null;
   const remainTotal = latest
-    ? latest.items.reduce((s, i) => s + (Number(i["잔여재고"] ?? i["재고수량"]) || 0), 0)
+    ? latest.items.reduce((s, i) => s + (Number(i["잔여재고"]) || 0), 0)
     : 0;
 
   const monthCounts = monthlyCounts(rows);
