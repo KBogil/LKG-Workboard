@@ -1770,68 +1770,68 @@ table.data-table tbody tr.row-alert:hover td {
 
 .notice-card-text a { color: var(--accent); text-underline-offset: 3px; }
 
-/* ---------- 탕비실: 재고 요약 띠 ---------- */
-/* 전체 품목 중 발주가 필요한 비중을 한 줄로 봅니다.
-   색만으로 읽지 않도록 아래에 종 수를 같이 적습니다. */
-.stock-summary {
-  padding: 16px 20px 4px;
-}
-
-.ss-bar {
+/* ---------- 탕비실: 재고 현황 (한 표로 통합) ---------- */
+/* 요약 한 줄 + 등급 범례. 표 바로 위에 붙여 한 덩어리로 읽히게 합니다. */
+.stock-legend {
   display: flex;
-  height: 12px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--surface-soft);
-}
-
-.ss-seg.ok { background: var(--accent); }
-.ss-seg.need { background: var(--warn); }
-
-.ss-legend {
-  display: flex;
-  gap: 16px;
-  margin-top: 9px;
-  font-size: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  padding: 14px 20px 8px;
+  font-size: 12.5px;
   color: var(--text-soft);
 }
 
-.ss-dot {
-  width: 10px;
-  height: 10px;
+.stock-legend strong { color: var(--danger); }
+
+.sl-dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 12px;
+}
+
+/* 품목 앞의 점 = 소진 임박 정도. 칸 안의 막대·글자와 같은 뜻이라
+   색을 못 읽어도 정보가 빠지지 않습니다. */
+.dot {
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   display: inline-block;
-  margin-right: 6px;
+  margin-right: 9px;
+  flex-shrink: 0;
+  vertical-align: 1px;
 }
 
-.ss-dot.ok { background: var(--accent); }
-.ss-dot.need { background: var(--warn); }
+.dot.danger { background: var(--danger); }
+.dot.warn { background: var(--warn); }
+.dot.ok { background: var(--accent); }
+.dot.none { background: transparent; border: 1.5px solid var(--border); }
 
-/* ---------- 탕비실: 재고 소진 예상 ---------- */
-.cover-block {
-  margin: 16px 20px 4px;
-  padding: 14px 0 4px;
-  border-top: 1px solid var(--border);
-}
+/* 소진 예상 칸: 작은 막대 + 숫자 */
+.stock-table th.cover-th { width: 230px; }
 
-.cover-head {
+/* td 자체를 flex로 만들면 표 레이아웃이 흐트러져서, 안에 한 겹 감쌉니다. */
+.stock-table td.cover-cell { max-width: none; }
+
+.cover-wrap {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
-  font-size: 13.5px;
 }
 
-.cover-note { font-size: 11.5px; color: var(--text-soft); }
-
-.cover-block .bar-chart { padding: 4px 0 0; }
-
-/* 품목명이 길어서 왼쪽 칸을 넓게 씁니다 */
-.cover-block .bar-row {
-  grid-template-columns: minmax(150px, 30%) 1fr 100px;
+.cover-mini {
+  flex: 1;
+  min-width: 60px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  overflow: hidden;
 }
 
 .cover-fill {
+  display: block;
   height: 100%;
   border-radius: 999px;
   transition: width 0.25s ease;
@@ -1840,17 +1840,24 @@ table.data-table tbody tr.row-alert:hover td {
 .cover-fill.danger { background: var(--danger); }
 .cover-fill.warn { background: var(--warn); }
 .cover-fill.ok { background: var(--accent); }
+.cover-fill.none { background: transparent; }
 
-.legend-swatch.cover {
-  width: 16px;
-  height: 10px;
-  border-radius: 3px;
-  display: inline-block;
+.cover-text {
+  width: 86px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
-.legend-swatch.cover.danger { background: var(--danger); }
-.legend-swatch.cover.warn { background: var(--warn); }
-.legend-swatch.cover.ok { background: var(--accent); }
+.cover-text.muted { color: var(--text-soft); font-weight: 400; }
+
+/* 화면이 좁으면 막대를 숨기고 숫자만 남깁니다 */
+@media (max-width: 760px) {
+  .cover-mini { display: none; }
+  .stock-table th.cover-th { width: auto; }
+}
 
 /* ---------- 팝업 안의 월별 표 ---------- */
 /* 지금 보고 있는 달과 합계 줄을 구분해 줍니다. */
