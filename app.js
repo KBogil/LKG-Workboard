@@ -86,11 +86,12 @@ els.pinInput.addEventListener("keydown", (e) => {
 
 const VIEW_TITLES = {
   overview: "개요",
-  jeonsan: "전산",
-  tangbisil: "탕비실",
-  somopum: "소모품",
-  vehicle: "법인차량",
-  mail: "메일룸",
+  jeonsan: "전산 관리",
+  tangbisil: "탕비실 관리",
+  somopum: "소모품 관리",
+  vehicle: "법인차량 관리",
+  mail: "메일룸 관리",
+  plant: "플랜트박스 관리",
   annual: "연간 통계",
 };
 
@@ -275,6 +276,19 @@ function filterCurrentMonthGeneric(records) {
   return records.filter((r) => isSameMonth(parseKDate(r[field]), now));
 }
 
+/* 날짜 열을 보고 최신순으로 정렬합니다. 날짜를 못 읽은 행은 뒤로 보냅니다.
+   시트에 적힌 순서를 그냥 뒤집으면, 아래쪽 빈 줄이나 나중에 끼워 넣은 행 때문에
+   순서가 어긋나기 때문입니다. */
+function sortByDateDesc(records, ...fields) {
+  return records
+    .slice()
+    .sort((a, b) => {
+      const da = fields.map((f) => parseKDate(pick(a, f))).find(Boolean);
+      const db = fields.map((f) => parseKDate(pick(b, f))).find(Boolean);
+      return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+    });
+}
+
 function escapeHtml(v) {
   return String(v)
     .replaceAll("&", "&amp;")
@@ -454,12 +468,15 @@ function renderView(view) {
     somopum: renderSomopum,
     vehicle: renderVehicle,
     mail: renderMail,
+    plant: renderPlant,
     annual: renderAnnual,
   };
   TABLE_REGISTRY = {}; // 이전 화면의 표 정보는 버립니다
   closeModal();
+  stopNoticeRotation();
   const fn = renderers[view] || renderOverview;
   els.content.innerHTML = fn();
+  if (view === "overview") startNoticeRotation();
 }
 
 function renderOverview() {
@@ -481,13 +498,17 @@ function renderOverview() {
     <div class="banner-row">
       <div class="banner-card">
         <h2>LKG Workboard 개요</h2>
-        <p>${monthLabel} 기준 · 전산 · 탕비실 · 소모품 · 법인차량 · 메일룸 업무 현황을 한눈에 확인하세요.</p>
+        <p>${monthLabel} 기준 · 전산 · 탕비실 · 소모품 · 법인차량 · 메일룸 관리 현황을 한눈에 확인하세요.</p>
       </div>
       <div class="banner-side">
         <h3>자동 업데이트</h3>
         <p>구글 시트 입력 내용이 15분마다 자동으로 이 화면에 반영됩니다. 전체 누적 통계는 왼쪽 '연간 통계' 메뉴에서 확인하세요.</p>
       </div>
     </div>
+
+    ${noticeBar()}
+
+    ${schedulePanel()}
 
     <div class="kpi-grid">
       ${kpiCard("전산 업무", jeonsan.length + "건", monthLabel + " 기준")}
@@ -524,6 +545,369 @@ function renderOverview() {
       ${ownerCard("소모품", "박동국(Kaju)", (somopum === null ? somopumAll : somopum).length + "건")}
       ${ownerCard("법인차량", "박동국(Kaju)", (vehicleLog === null ? vehicleLogAll : vehicleLog).length + "건")}
       ${ownerCard("메일룸", "박동국(Kaju)", (mail === null ? mailAll : mail).length + "건")}
+    </div>
+  `;
+}
+
+/* ---------------- 공지사항 (자동으로 위로 넘어가는 띠) ---------------- */
+
+/* 공지는 별도 DB 없이 시트 한 탭(A~D열)으로 관리합니다.
+   시트에 한 줄 쓰면 15분 안에 여기에 뜹니다.
+   열 이름은 공지(내용) / 시작일 / 종료일 / 중요 / 링크 를 알아봅니다. */
+let NOTICE_TIMER = null;
+let NOTICE_INDEX = 0;
+
+function noticeRows() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return getRecords("notice")
+    .map((r) => ({
+      text: String(pick(r, "공지", "내용", "제목", "안내") || "").trim(),
+      from: parseKDate(pick(r, "시작일", "게시일", "등록일")),
+      to: parseKDate(pick(r, "종료일", "마감일")),
+      important: /true|y|중요|고정|✓/i.test(String(pick(r, "중요", "고정"))),
+      link: String(pick(r, "링크", "url") || "").trim(),
+    }))
+    .filter((n) => n.text)
+    // 게시 기간이 적혀 있으면 그 기간에만 보여줍니다 (비어 있으면 항상)
+    .filter((n) => (!n.from || n.from <= today) && (!n.to || n.to >= today))
+    .sort((a, b) => (b.important ? 1 : 0) - (a.important ? 1 : 0));
+}
+
+function noticeBar() {
+  const list = noticeRows();
+  if (!list.length) return ""; // 공지가 없으면 띠 자체를 그리지 않습니다
+  const items = list
+    .map(
+      (n) => `<li class="notice-item">
+        ${n.important ? `<span class="notice-flag">중요</span>` : ""}
+        ${
+          n.link
+            ? `<a href="${escapeHtml(n.link)}" target="_blank" rel="noopener">${escapeHtml(n.text)}</a>`
+            : escapeHtml(n.text)
+        }
+      </li>`
+    )
+    .join("");
+  const dots =
+    list.length > 1
+      ? `<div class="notice-dots">${list
+          .map((_, i) => `<span class="notice-dot${i ? "" : " on"}"></span>`)
+          .join("")}</div>`
+      : "";
+  return `<div class="notice-bar" id="noticeBar">
+    <span class="notice-tag">공지</span>
+    <div class="notice-view"><ul class="notice-list" id="noticeList">${items}</ul></div>
+    ${dots}
+  </div>`;
+}
+
+function showNotice(index) {
+  const list = document.getElementById("noticeList");
+  if (!list || !list.children.length) return;
+  const count = list.children.length;
+  NOTICE_INDEX = ((index % count) + count) % count;
+  const step = list.children[0].offsetHeight || 24;
+  list.style.transform = `translateY(-${NOTICE_INDEX * step}px)`;
+  document
+    .querySelectorAll("#noticeBar .notice-dot")
+    .forEach((d, i) => d.classList.toggle("on", i === NOTICE_INDEX));
+}
+
+function stopNoticeRotation() {
+  if (NOTICE_TIMER) clearInterval(NOTICE_TIMER);
+  NOTICE_TIMER = null;
+}
+
+function startNoticeRotation() {
+  stopNoticeRotation();
+  const bar = document.getElementById("noticeBar");
+  const list = document.getElementById("noticeList");
+  if (!bar || !list || list.children.length < 2) return;
+
+  NOTICE_INDEX = 0;
+  showNotice(0);
+  const tick = () => showNotice(NOTICE_INDEX + 1);
+  NOTICE_TIMER = setInterval(tick, 4500);
+
+  // 읽는 중에 넘어가면 곤란하니, 마우스를 올리면 멈춥니다.
+  bar.addEventListener("mouseenter", stopNoticeRotation);
+  bar.addEventListener("mouseleave", () => {
+    stopNoticeRotation();
+    NOTICE_TIMER = setInterval(tick, 4500);
+  });
+}
+
+/* ---------------- 팀 스케줄 달력 ---------------- */
+
+/* 일정 유형별 색. 네 가지 + 기타(회색)로 묶었습니다.
+   색각이상까지 포함한 구분 검증(전체 쌍)을 통과한 조합이고,
+   막대 안에 유형 글자를 같이 적기 때문에 색만으로 읽지 않아도 됩니다. */
+const SCHEDULE_TYPES = [
+  { test: /연차|휴가|반차|월차|보상/, label: "연차 · 휴가", color: "#2a78d6" },
+  { test: /외근|출장|미팅|방문/, label: "외근 · 출장", color: "#eb6834" },
+  { test: /재택|원격/, label: "재택", color: "#1baf7a" },
+  { test: /교육|워크샵|워크숍|세미나|회의|연수/, label: "교육 · 회의", color: "#4a3aa7" },
+];
+const SCHEDULE_OTHER = { label: "기타", color: "#8A8171" };
+
+function scheduleStyle(type) {
+  const hit = SCHEDULE_TYPES.find((t) => t.test.test(type));
+  return hit || SCHEDULE_OTHER;
+}
+
+/* #2a78d6 -> "42,120,214" (반투명 배경을 만들기 위해) */
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).join(",");
+}
+
+function scheduleRows() {
+  return getRecords("schedule")
+    .map((r) => {
+      const from = parseKDate(pick(r, "시작일", "시작", "일자", "날짜"));
+      const to = parseKDate(pick(r, "종료일", "종료", "복귀")) || from;
+      return {
+        raw: r,
+        name: String(pick(r, "이름", "성명", "크루", "담당자") || "").trim(),
+        type: String(pick(r, "유형", "구분", "일정", "종류") || "").trim() || "기타",
+        note: String(pick(r, "비고", "메모") || "").trim(),
+        from,
+        to,
+      };
+    })
+    .filter((x) => x.name && x.from);
+}
+
+function holidaySet() {
+  const list = getRecords("holidays");
+  return new Set(list.filter((x) => typeof x === "string"));
+}
+
+function ymd(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+function dayLabel(d) {
+  return `${d.getMonth() + 1}.${d.getDate()}`;
+}
+
+/* 보고 있는 달 (처음엔 이번 달) */
+let SCHED_YEAR = null;
+let SCHED_MONTH = null;
+let SCHED_VISIBLE = []; // 지금 화면에 그려진 일정 (막대 클릭용)
+
+function scheduleCalendar() {
+  const all = scheduleRows();
+  if (!all.length) return ""; // 시트가 없으면 아무것도 그리지 않습니다
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (SCHED_YEAR === null) {
+    SCHED_YEAR = today.getFullYear();
+    SCHED_MONTH = today.getMonth();
+  }
+
+  const first = new Date(SCHED_YEAR, SCHED_MONTH, 1);
+  const dayCount = new Date(SCHED_YEAR, SCHED_MONTH + 1, 0).getDate();
+  const last = new Date(SCHED_YEAR, SCHED_MONTH, dayCount);
+  const holidays = holidaySet();
+  const WEEK = ["일", "월", "화", "수", "목", "금", "토"];
+
+  // 이 달과 겹치는 일정만 남기고, 달 밖으로 삐져나간 부분은 잘라 그립니다.
+  SCHED_VISIBLE = all
+    .filter((e) => e.from <= last && e.to >= first)
+    .map((e) => {
+      const s = e.from < first ? 1 : e.from.getDate();
+      const t = e.to > last ? dayCount : e.to.getDate();
+      return { ...e, startDay: s, endDay: t };
+    });
+
+  const todayCount = all.filter((e) => e.from <= today && e.to >= today).length;
+
+  const headCells = [];
+  for (let d = 1; d <= dayCount; d++) {
+    const date = new Date(SCHED_YEAR, SCHED_MONTH, d);
+    const wd = date.getDay();
+    const cls = [
+      "cal-day",
+      wd === 0 || wd === 6 ? "off" : "",
+      holidays.has(ymd(date)) ? "off holiday" : "",
+      date.getTime() === today.getTime() ? "today" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    headCells.push(
+      `<div class="${cls}" style="grid-column:${d + 1}"><span class="cal-wd">${WEEK[wd]}</span><span class="cal-dd">${d}</span></div>`
+    );
+  }
+
+  const bgCells = (extra) => {
+    const out = [];
+    for (let d = 1; d <= dayCount; d++) {
+      const date = new Date(SCHED_YEAR, SCHED_MONTH, d);
+      const wd = date.getDay();
+      const cls = [
+        "cal-cell",
+        wd === 0 || wd === 6 || holidays.has(ymd(date)) ? "off" : "",
+        date.getTime() === today.getTime() ? "today" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      out.push(`<div class="${cls}" style="grid-column:${d + 1}"></div>`);
+    }
+    return out.join("") + (extra || "");
+  };
+
+  // 크루별로 묶고, 같은 사람의 일정이 겹치면 줄을 나눠 그립니다.
+  const byName = new Map();
+  SCHED_VISIBLE.forEach((e, i) => {
+    if (!byName.has(e.name)) byName.set(e.name, []);
+    byName.get(e.name).push({ ...e, index: i });
+  });
+
+  const crewRows = [...byName.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], "ko"))
+    .map(([name, items]) => {
+      const lanes = [];
+      items
+        .slice()
+        .sort((a, b) => a.startDay - b.startDay)
+        .forEach((item) => {
+          let lane = lanes.find((l) => l.every((x) => x.endDay < item.startDay || x.startDay > item.endDay));
+          if (!lane) {
+            lane = [];
+            lanes.push(lane);
+          }
+          lane.push(item);
+        });
+
+      return lanes
+        .map((lane, li) => {
+          const bars = lane
+            .map((item) => {
+              const st = scheduleStyle(item.type);
+              const rgb = hexToRgb(st.color);
+              const span = item.endDay - item.startDay + 1;
+              const title = `${item.name} · ${item.type} · ${dayLabel(item.from)}${
+                item.to.getTime() !== item.from.getTime() ? ` ~ ${dayLabel(item.to)}` : ""
+              }${item.note ? ` · ${item.note}` : ""}`;
+              return `<button class="cal-bar" data-sched-row="${item.index}" title="${escapeHtml(title)}"
+                style="grid-column:${item.startDay + 1} / span ${span};
+                       background:rgba(${rgb},0.16); border-color:rgba(${rgb},0.55);
+                       box-shadow: inset 3px 0 0 ${st.color};">
+                <span class="cal-bar-text">${escapeHtml(item.type)}${
+                  item.note ? ` · ${escapeHtml(item.note)}` : ""
+                }</span>
+              </button>`;
+            })
+            .join("");
+          return `<div class="cal-row">
+            <div class="cal-name">${li === 0 ? escapeHtml(name) : ""}</div>
+            ${bgCells(bars)}
+          </div>`;
+        })
+        .join("");
+    })
+    .join("");
+
+  const legend = `<div class="cal-legend">
+    ${[...SCHEDULE_TYPES, SCHEDULE_OTHER]
+      .map(
+        (t) => `<span class="legend-item"><span class="cal-swatch"
+          style="background:rgba(${hexToRgb(t.color)},0.16); box-shadow: inset 3px 0 0 ${t.color};"></span>${escapeHtml(
+          t.label
+        )}</span>`
+      )
+      .join("")}
+  </div>`;
+
+  const body = crewRows
+    ? `<div class="cal-scroll"><div class="cal" style="--cal-days:${dayCount}">
+        <div class="cal-row cal-head"><div class="cal-name">크루</div>${headCells.join("")}</div>
+        ${crewRows}
+      </div></div>${legend}`
+    : `<div class="empty-note">${SCHED_YEAR}년 ${SCHED_MONTH + 1}월에 등록된 일정이 없습니다.</div>`;
+
+  return `
+    <div class="cal-nav">
+      <button class="cal-nav-btn" data-sched-nav="prev" aria-label="지난달">◀</button>
+      <span class="cal-title">${SCHED_YEAR}년 ${SCHED_MONTH + 1}월</span>
+      <button class="cal-nav-btn" data-sched-nav="next" aria-label="다음달">▶</button>
+      <button class="cal-nav-btn cal-today-btn" data-sched-nav="today">오늘</button>
+      <span class="cal-note">오늘 일정 ${todayCount}건 · 막대를 누르면 상세</span>
+    </div>
+    ${body}
+  `;
+}
+
+function schedulePanel() {
+  const inner = scheduleCalendar();
+  if (!inner) return "";
+  return `<div class="panel">
+    <div class="panel-header">
+      <h2>팀 스케줄</h2>
+      <span class="panel-meta">연차 · 외근 · 재택 등 크루별 일정</span>
+    </div>
+    <div class="panel-body" id="schedBox">${inner}</div>
+  </div>`;
+}
+
+els.content.addEventListener("click", (e) => {
+  const nav = e.target.closest("[data-sched-nav]");
+  if (nav) {
+    const now = new Date();
+    if (nav.dataset.schedNav === "prev") SCHED_MONTH -= 1;
+    else if (nav.dataset.schedNav === "next") SCHED_MONTH += 1;
+    else {
+      SCHED_YEAR = now.getFullYear();
+      SCHED_MONTH = now.getMonth();
+    }
+    // 12월 다음은 다음 해 1월이 되도록 정리합니다
+    const norm = new Date(SCHED_YEAR, SCHED_MONTH, 1);
+    SCHED_YEAR = norm.getFullYear();
+    SCHED_MONTH = norm.getMonth();
+    const box = document.getElementById("schedBox");
+    if (box) box.innerHTML = scheduleCalendar();
+    return;
+  }
+  const bar = e.target.closest("[data-sched-row]");
+  if (bar) {
+    const item = SCHED_VISIBLE[Number(bar.dataset.schedRow)];
+    if (item) openModal(`${item.name} · ${item.type}`, recordDetailHtml(item.raw));
+  }
+});
+
+/* ---------------- 플랜트박스 ---------------- */
+
+function renderPlant() {
+  const rows = getRecords("plant");
+  if (!rows.length) {
+    return `
+      <div class="panel">
+        <div class="panel-header">
+          <h2>플랜트박스 관리</h2>
+          <span class="panel-meta">시트 연결 대기 중</span>
+        </div>
+        <div class="panel-body">
+          <div class="empty-note" style="text-align:left; padding:22px 24px; line-height:1.7;">
+            아직 연결된 시트가 없습니다. 시트 링크(탭 주소)를 주시면 이 화면을 채우겠습니다.<br />
+            표에 <strong>날짜</strong>가 들어간 열과 <strong>담당자 · 크루 이름</strong> 열이 있으면,
+            다른 카테고리처럼 월별 기록과 크루별 조회를 그대로 붙일 수 있습니다.
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div class="kpi-grid">${kpiCard("전체 기록", rows.length + "건", "누적")}</div>
+    <div class="panel">
+      <div class="panel-header"><h2>플랜트박스 관리</h2><span class="panel-meta">${rows.length}건</span></div>
+      <div class="panel-body">
+        ${renderTable(rows.slice().reverse(), null, { detailTitle: "플랜트박스 상세", center: true })}
+      </div>
     </div>
   `;
 }
@@ -803,9 +1187,7 @@ function renderJeonsan() {
         <button class="crew-search-btn" id="crewSearchBtn">조회</button>
       </div>
 
-      <div class="crew-result-box" id="crewResult">
-        <div class="empty-note">이름을 입력하고 조회를 누르면, 기록이 있는 대장을 별도 창에서 골라볼 수 있습니다.</div>
-      </div>
+      <div class="crew-result-box" id="crewResult"></div>
     </div>
 
     <div class="panel">
@@ -832,7 +1214,7 @@ function renderJeonsan() {
 
     <div class="panel">
       <div class="panel-header"><h2>자산 지급대장</h2><span class="panel-meta">${asset.length}건</span></div>
-      <div class="panel-body">${renderTable(asset.slice().reverse(), null, { detailTitle: "자산 지급 상세", center: true })}</div>
+      <div class="panel-body">${renderTable(sortByDateDesc(asset, "완료일자"), null, { detailTitle: "자산 지급 상세", center: true })}</div>
     </div>
 
     <div class="panel">
@@ -1513,9 +1895,7 @@ function renderSomopum() {
         <button class="crew-search-btn" id="somSearchBtn">조회</button>
       </div>
 
-      <div class="crew-result-box" id="somResult">
-        <div class="empty-note">이름을 입력하고 조회를 누르면, 불출된 품목과 수량을 별도 창에서 볼 수 있습니다.</div>
-      </div>
+      <div class="crew-result-box" id="somResult"></div>
     </div>
 
     <div class="panel">
@@ -1827,9 +2207,7 @@ function mailSection(kind) {
         <button class="crew-search-btn" data-mail-go="${kind}">조회</button>
       </div>
 
-      <div class="crew-result-box" id="mailResult-${kind}">
-        <div class="empty-note">이름을 입력하고 조회를 누르면, 그 크루의 ${escapeHtml(src.short)} 기록을 최신순으로 볼 수 있습니다.</div>
-      </div>
+      <div class="crew-result-box" id="mailResult-${kind}"></div>
     </div>
 
     <div class="panel">
