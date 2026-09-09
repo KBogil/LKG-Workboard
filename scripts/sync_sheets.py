@@ -9,6 +9,8 @@
   G열 이후의 "일자별 블록"은 위치를 하드코딩하지 않고 헤더에서 자동으로 찾아냅니다.
 - 소모품 "월별 불출량&검수" 탭도 전용 처리(build_somopum_stock)를 탑니다.
   가로로 월 블록이 이어지는 형태라 일반 표로는 읽을 수 없습니다.
+- 공지/스케줄 탭은 전용 처리(build_board)를 탑니다. 한 탭 안에서 A~D열과 F~J열이
+  서로 다른 표이기 때문입니다.
 - 결과는 WORKBOARD_PIN(비밀번호)으로 암호화되어 data/workboard.json에 저장됩니다.
 - 이 파일은 저장소에 커밋하지 않고, 워크플로가 GitHub Pages로 바로 배포합니다.
   (암호화된 데이터는 압축이 안 돼서, 커밋으로 쌓으면 저장소가 기가 단위로 불어납니다)
@@ -569,6 +571,9 @@ SHEET_ERRORS = {"#REF!", "#N/A", "#VALUE!", "#DIV/0!", "#NAME?", "#NULL!",
 
 HEADER_SEARCH_ROWS = 12  # 헤더는 아무리 늦어도 이 안에 있다고 봅니다
 
+# 이 값들만 들어 있는 행은 '빈 행'으로 봅니다. 체크박스는 값이 없어도 FALSE로 나옵니다.
+CHECKBOX_ONLY = {"FALSE", "TRUE"}
+
 
 def clean_cell(value):
     """셀 값을 정리합니다. 수식 오류는 빈 문자열로 바꿉니다."""
@@ -598,6 +603,9 @@ def rows_to_records(rows):
     - 이름이 없는 열은 버립니다.
     - 수식 오류(#REF! 등)만 남은 행이나 완전히 빈 행은 버립니다.
       (시트 아래쪽에 수식만 늘어서 있는 수천 개의 빈 행이 그대로 딸려오는 것을 막습니다)
+    - 체크박스 열의 FALSE/TRUE만 남은 행도 빈 행으로 봅니다.
+      자산 지급대장처럼 '시트 반영' 체크박스가 시트 끝까지 깔려 있으면,
+      내용이 없는 행에도 FALSE가 들어 있어서 수천 건이 그대로 딸려옵니다.
     """
     if not rows:
         return []
@@ -614,10 +622,39 @@ def rows_to_records(rows):
     records = []
     for row in rows[header_idx + 1:]:
         record = {name: clean_cell(row[i]) if i < len(row) else "" for i, name in named}
-        if not any(record.values()):
-            continue  # 내용이 하나도 없는 행 (오류만 있던 행 포함)
+        # 체크박스 값(FALSE/TRUE)은 '내용'으로 치지 않습니다.
+        meaningful = [
+            v for v in record.values()
+            if v and str(v).strip().upper() not in CHECKBOX_ONLY
+        ]
+        if not meaningful:
+            continue  # 내용이 하나도 없는 행 (오류만·체크박스만 있던 행 포함)
         records.append(record)
     return records
+
+
+# ------------------------------------------------ 공지 / 스케줄 (한 탭 두 구역)
+
+# 한 탭 안에서 A~D열은 공지, F~J열은 스케줄로 나뉘어 있습니다(E열은 구분용 빈 열).
+BOARD_NOTICE_COLS = (0, 4)     # A, B, C, D
+BOARD_SCHEDULE_COLS = (5, 10)  # F, G, H, I, J
+
+
+def slice_cols(rows, start, end):
+    """행마다 지정한 열 구간만 잘라냅니다. 짧은 행은 빈 행으로 둡니다."""
+    out = []
+    for row in rows:
+        out.append(row[start:end] if len(row) > start else [])
+    return out
+
+
+def build_board(rows):
+    """공지 구역과 스케줄 구역을 각각 따로 표로 읽습니다.
+    구역별로 헤더를 따로 찾기 때문에, 두 구역의 헤더 줄이 달라도 됩니다."""
+    return {
+        "notice": rows_to_records(slice_cols(rows, *BOARD_NOTICE_COLS)),
+        "schedule": rows_to_records(slice_cols(rows, *BOARD_SCHEDULE_COLS)),
+    }
 
 
 # ---------------------------------------------------------------- 메인
@@ -667,6 +704,24 @@ def main():
 
         rows = get_values(spreadsheet_id, title, access_token)
 
+        if source.get("special") == "board":
+            # 공지 + 스케줄이 한 탭에 좌우로 나뉘어 있어 전용 처리를 탑니다.
+            try:
+                board = build_board(rows)
+            except Exception:
+                import traceback
+                print("[오류] 공지/스케줄 시트 처리 중 문제가 발생했습니다.")
+                traceback.print_exc()
+                board = {"notice": [], "schedule": []}
+            data["notice"] = board["notice"]
+            data["schedule"] = board["schedule"]
+            # 열 이름을 로그에 남겨둡니다. 화면에 값이 안 뜨면 여기부터 확인하세요.
+            n_cols = list(board["notice"][0].keys()) if board["notice"] else []
+            s_cols = list(board["schedule"][0].keys()) if board["schedule"] else []
+            print(f"[완료] {key} ({title}): 공지 {len(board['notice'])}건 {n_cols} · "
+                  f"스케줄 {len(board['schedule'])}건 {s_cols}")
+            continue
+
         if source.get("special") == "somopum_stock":
             # 가로로 월 블록이 이어지는 시트라 전용 처리를 탑니다.
             try:
@@ -684,6 +739,13 @@ def main():
         records = rows_to_records(rows)
         data[key] = records
         print(f"[완료] {key} ({title}): {len(records)}건")
+
+    # 달력에서 주말·공휴일을 회색으로 칠하려면 브라우저도 공휴일을 알아야 해서,
+    # 파이썬이 계산한 올해·내년 공휴일 목록을 같이 담아 보냅니다.
+    this_year, _ = month_of(0)
+    data["holidays"] = sorted(
+        korean_holidays(this_year) | korean_holidays(this_year + 1) | EXTRA_HOLIDAYS
+    )
 
     passphrase = os.environ["WORKBOARD_PIN"]
     payload = {"generated_at": datetime.now(timezone.utc).isoformat(), "data": data}
