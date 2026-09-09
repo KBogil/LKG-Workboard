@@ -5,13 +5,8 @@
 - config/sources.json 에 등록된 각 source마다:
     - gid가 있으면: 그 gid(탭 고유번호)에 해당하는 탭을 읽습니다.
     - dynamic_month가 true이면: "OO년 O월" 형식의 "이번 달" 탭을 자동으로 찾아 읽습니다.
-- 시트 하나가 실패해도(권한 없음, 탭 삭제, 서식 변경 등) 나머지는 계속 갱신됩니다.
 - 탕비실은 전용 처리(build_tangbisil_data)를 탑니다. A~F열은 고정 의미로 읽고,
   G열 이후의 "일자별 블록"은 위치를 하드코딩하지 않고 헤더에서 자동으로 찾아냅니다.
-- 소모품 "월별 불출량&검수" 탭도 전용 처리(build_somopum_stock)를 탑니다.
-  가로로 월 블록이 이어지는 형태라 일반 표로는 읽을 수 없습니다.
-- 공지/스케줄 탭은 전용 처리(build_board)를 탑니다. 한 탭 안에서 A~D열과 F~J열이
-  서로 다른 표이기 때문입니다.
 - 결과는 WORKBOARD_PIN(비밀번호)으로 암호화되어 data/workboard.json에 저장됩니다.
 - 이 파일은 저장소에 커밋하지 않고, 워크플로가 GitHub Pages로 바로 배포합니다.
   (암호화된 데이터는 압축이 안 돼서, 커밋으로 쌓으면 저장소가 기가 단위로 불어납니다)
@@ -454,8 +449,8 @@ def build_somopum_stock(rows):
     """가로로 월 블록이 이어지는 시트를 월별 품목 목록으로 바꿉니다.
 
     한 달 블록은 보통 세 구역으로 나뉩니다.
-      - "월별 불출량"      : 품목 / 수량 / 평균
-      - "상시 수량 조사"   : 재고 수량 / 입고 수량   (왼쪽 품목 행과 같은 줄)
+      - "월별 불출량"      : 품목 / 수량(=불출량) / 평균
+      - "상시 수량 조사"   : 재고 수량_ea 기준(=잔여 재고) / 입고 수량   (왼쪽 품목 행과 같은 줄)
       - "N월 재고 조사"    : No. / 품목 / N월 재고 / 실물 재고 / 불출수량
     열 위치는 달마다 다르므로 하드코딩하지 않고, 2행의 제목을 보고 매번 찾아냅니다.
     """
@@ -528,30 +523,27 @@ def build_somopum_stock(rows):
                     it = slot(name)
                     it["불출량"] = to_number(cell(row, c_qty)) if c_qty is not None else None
                     it["평균"] = to_number(cell(row, c_avg)) if c_avg is not None else None
+                    # "재고 수량_ea 기준 (잔여수량 + 입고수량)" 열이 실제 잔여 재고입니다.
                     if c_stock is not None:
-                        it["재고수량"] = to_number(cell(row, c_stock))
+                        it["잔여재고"] = to_number(cell(row, c_stock))
                     if c_in is not None:
                         it["입고수량"] = to_number(cell(row, c_in))
 
         # ② N월 재고 조사
+        # 실물 재고 조사는 현장에서 눈으로 세는 값이라 대시보드에는 싣지 않습니다.
+        # 여기서는 왼쪽 블록에 잔여 재고가 비어 있을 때만 'N월 재고'로 채웁니다.
         if audit:
             a0, a1 = audit
             c_item = find_col(head_row, a0, a1, "품목")
             c_remain = find_col(head_row, a0, a1, "재고", exclude=("실물",))
-            c_real = find_col(head_row, a0, a1, "실물")
-            c_out = find_col(head_row, a0, a1, "불출")
-            if c_item is not None:
+            if c_item is not None and c_remain is not None:
                 for row in rows[SOMOPUM_FIRST_DATA_ROW - 1:]:
                     name = clean_cell(cell(row, c_item))
                     if not name:
                         continue
                     it = slot(name)
-                    if c_remain is not None:
+                    if it.get("잔여재고") is None:
                         it["잔여재고"] = to_number(cell(row, c_remain))
-                    if c_real is not None:
-                        it["실물재고"] = to_number(cell(row, c_real))
-                    if c_out is not None:
-                        it["검수불출량"] = to_number(cell(row, c_out))
 
         rows_out = [items[n] for n in order]
         # 값이 하나도 없는(이름만 있는) 품목은 버립니다
