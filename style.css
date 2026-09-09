@@ -1875,3 +1875,5 @@ table.data-table tbody tr.row-total td {
 /* 상세 팝업에서 증감 값에도 표와 같은 색을 씁니다. */
 .detail-value.delta.up { color: var(--delta-up); font-weight: 700; }
 .detail-value.delta.down { color: var(--delta-down); font-weight: 700; }
+/* 팝업 상세의 흐린 보조 문구 */
+.detail-value .muted { color: var(--text-soft); }
