@@ -510,31 +510,8 @@ function renderOverview() {
 
     ${schedulePanel()}
 
-    <div class="kpi-grid">
-      ${kpiCard("전산 업무", jeonsan.length + "건", monthLabel + " 기준")}
-      ${kpiCard(
-        "탕비실 진열",
-        `${tangbisil.workdays_done} / ${tangbisil.workdays_total}일`,
-        tangbisil.workdays_total ? `${monthLabel} 근무일 기준 진행` : "일자별 진행 기록 없음"
-      )}
-      ${
-        somopum === null
-          ? kpiCard("소모품", somopumAll.length + "건", "전체 누적 (날짜 열 미확인)")
-          : kpiCard("소모품", somopum.length + "건", monthLabel + " 기준")
-      }
-      ${
-        vehicleLog === null
-          ? kpiCard("법인차량", vehicleLogAll.length + "건", "전체 누적 (날짜 열 미확인)")
-          : kpiCard("법인차량", vehicleLog.length + "건", monthLabel + " 기준")
-      }
-      ${
-        mail === null
-          ? kpiCard("메일룸", mailAll.length + "건", "전체 누적 (날짜 열 미확인)")
-          : kpiCard("메일룸", mail.length + "건", monthLabel + " 기준")
-      }
-    </div>
-
-    <h2 class="section-title">업무 처리 담당자 (${monthLabel})</h2>
+    <h2 class="section-title">직무별 업무 처리 현황</h2>
+    <p class="section-note">${monthLabel} 기준</p>
     <div class="owner-grid">
       ${ownerCard("전산", "이재환(Jetty)", jeonsan.length + "건")}
       ${ownerCard(
@@ -595,12 +572,53 @@ function noticeBar() {
           .map((_, i) => `<span class="notice-dot${i ? "" : " on"}"></span>`)
           .join("")}</div>`
       : "";
-  return `<div class="notice-bar" id="noticeBar">
+  return `<div class="notice-bar" id="noticeBar" data-notice-all title="누르면 진행 중인 공지를 모두 봅니다">
     <span class="notice-tag">공지</span>
     <div class="notice-view"><ul class="notice-list" id="noticeList">${items}</ul></div>
     ${dots}
+    <button class="notice-more" data-notice-all>전체 보기</button>
   </div>`;
 }
+
+/* 공지 띠를 누르면 '진행 중인' 공지를 한 번에 펼쳐 봅니다.
+   게시 기간이 끝난 공지는 noticeRows()에서 이미 걸러져 있습니다. */
+function noticeModalHtml() {
+  const list = noticeRows();
+  if (!list.length) return `<div class="empty-note">진행 중인 공지가 없습니다.</div>`;
+
+  const period = (n) => {
+    if (!n.from && !n.to) return "상시 게시";
+    const f = n.from ? `${n.from.getFullYear()}.${n.from.getMonth() + 1}.${n.from.getDate()}` : "";
+    const t = n.to ? `${n.to.getFullYear()}.${n.to.getMonth() + 1}.${n.to.getDate()}` : "";
+    if (f && t) return `${f} ~ ${t}`;
+    return f ? `${f}부터` : `${t}까지`;
+  };
+
+  return `<p class="modal-note">진행 중인 공지 ${list.length}건 · 게시 기간이 끝난 공지는 빠져 있습니다.</p>
+    <div class="notice-full">${list
+      .map(
+        (n) => `<div class="notice-card${n.important ? " important" : ""}">
+          <div class="notice-card-head">
+            ${n.important ? `<span class="notice-flag">중요</span>` : ""}
+            <span class="notice-card-when">${escapeHtml(period(n))}</span>
+          </div>
+          <div class="notice-card-text">${
+            n.link
+              ? `<a href="${escapeHtml(n.link)}" target="_blank" rel="noopener">${escapeHtml(n.text)}</a>`
+              : escapeHtml(n.text)
+          }</div>
+        </div>`
+      )
+      .join("")}</div>`;
+}
+
+els.content.addEventListener("click", (e) => {
+  // 공지 안의 링크를 눌렀을 때는 그 링크로 가야 하므로 팝업을 열지 않습니다.
+  if (e.target.closest("#noticeBar a")) return;
+  if (e.target.closest("[data-notice-all]")) {
+    openModal("공지사항", noticeModalHtml());
+  }
+});
 
 function showNotice(index) {
   const list = document.getElementById("noticeList");
@@ -700,8 +718,8 @@ let SCHED_MONTH = null;
 let SCHED_VISIBLE = []; // 지금 화면에 그려진 일정 (막대 클릭용)
 
 function scheduleCalendar() {
+  // 일정이 하나도 없어도 달력은 그대로 띄웁니다.
   const all = scheduleRows();
-  if (!all.length) return ""; // 시트가 없으면 아무것도 그리지 않습니다
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -824,12 +842,14 @@ function scheduleCalendar() {
       .join("")}
   </div>`;
 
-  const body = crewRows
-    ? `<div class="cal-scroll"><div class="cal" style="--cal-days:${dayCount}">
-        <div class="cal-row cal-head"><div class="cal-name">크루</div>${headCells.join("")}</div>
-        ${crewRows}
-      </div></div>${legend}`
-    : `<div class="empty-note">${SCHED_YEAR}년 ${SCHED_MONTH + 1}월에 등록된 일정이 없습니다.</div>`;
+  const body = `<div class="cal-scroll"><div class="cal" style="--cal-days:${dayCount}">
+      <div class="cal-row cal-head"><div class="cal-name">크루</div>${headCells.join("")}</div>
+      ${crewRows}
+    </div></div>${
+      crewRows
+        ? legend
+        : `<div class="empty-note">${SCHED_YEAR}년 ${SCHED_MONTH + 1}월에 등록된 일정이 없습니다.</div>`
+    }`;
 
   return `
     <div class="cal-nav">
@@ -844,14 +864,12 @@ function scheduleCalendar() {
 }
 
 function schedulePanel() {
-  const inner = scheduleCalendar();
-  if (!inner) return "";
   return `<div class="panel">
     <div class="panel-header">
       <h2>팀 스케줄</h2>
       <span class="panel-meta">연차 · 외근 · 재택 등 크루별 일정</span>
     </div>
-    <div class="panel-body" id="schedBox">${inner}</div>
+    <div class="panel-body" id="schedBox">${scheduleCalendar()}</div>
   </div>`;
 }
 
