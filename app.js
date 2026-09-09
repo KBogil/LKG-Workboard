@@ -1333,11 +1333,7 @@ function renderTangbisil() {
         <h2>재고 현황</h2>
         <span class="panel-meta">${items.length}종 · 품목을 누르면 사용량 · 입고량 · 전월 재고</span>
       </div>
-      <div class="panel-body">
-        ${stockSummaryBar(items)}
-        ${stockCoverChart(items)}
-        ${stockTable(items)}
-      </div>
+      <div class="panel-body">${stockTable(items)}</div>
     </div>
 
     <div class="panel">
@@ -1359,95 +1355,100 @@ function coverMonths(item) {
   return stock / use;
 }
 
+/* 소진까지 남은 기간을 네 등급으로 나눕니다.
+   등급 순서(0→3)가 곧 표의 정렬 순서라서, 급한 품목이 위로 올라옵니다. */
+const COVER_BANDS = [
+  { cls: "danger", label: "1개월 미만" },
+  { cls: "warn", label: "2개월 미만" },
+  { cls: "ok", label: "여유" },
+  { cls: "none", label: "사용 기록 없음" },
+];
+
 function coverBand(months) {
-  if (months < 1) return { cls: "danger", label: "1개월 미만" };
-  if (months < 2) return { cls: "warn", label: "2개월 미만" };
-  return { cls: "ok", label: "여유" };
+  if (months === null) return COVER_BANDS[3];
+  if (months < 1) return COVER_BANDS[0];
+  if (months < 2) return COVER_BANDS[1];
+  return COVER_BANDS[2];
 }
 
-/* 정상 / 발주 필요 비율을 한 줄 띠로. 숫자를 같이 적어 색만으로 읽지 않게 합니다. */
-function stockSummaryBar(items) {
-  if (!items.length) return "";
-  const need = items.filter((i) => i["발주필요"]).length;
-  const ok = items.length - need;
-  const pct = (n) => (items.length ? (n / items.length) * 100 : 0);
-  return `<div class="stock-summary">
-    <div class="ss-bar">
-      <div class="ss-seg ok" style="width:${pct(ok)}%" title="정상 ${ok}종"></div>
-      <div class="ss-seg need" style="width:${pct(need)}%" title="발주 필요 ${need}종"></div>
-    </div>
-    <div class="ss-legend">
-      <span class="legend-item"><span class="ss-dot ok"></span>정상 ${ok}종</span>
-      <span class="legend-item"><span class="ss-dot need"></span>발주 필요 ${need}종</span>
-    </div>
-  </div>`;
-}
+const COVER_CAP = 6; // 6개월 넘게 남은 품목은 막대를 꽉 채웁니다
 
-/* 소진이 임박한 순서로 보여줍니다. 표의 '발주 필요'가 지금 상태라면,
-   이 그래프는 '곧 발주가 필요해질 품목'을 미리 보여주는 쪽입니다. */
-function stockCoverChart(items) {
-  const list = items
-    .map((i) => ({ item: i, months: coverMonths(i) }))
-    .filter((x) => x.months !== null)
-    .sort((a, b) => a.months - b.months)
-    .slice(0, 8);
-
-  if (!list.length) return "";
-
-  const CAP = 6; // 6개월 넘게 남은 품목은 막대를 꽉 채웁니다
-  const rows = list
-    .map(({ item, months }) => {
-      const band = coverBand(months);
-      const width = Math.max(Math.min(months / CAP, 1) * 100, 3);
-      const text = months >= CAP ? "6개월 이상" : `약 ${months.toFixed(1)}개월치`;
-      return `<div class="bar-row">
-        <button class="bar-link" data-tb-name="${escapeHtml(item["상품명"])}" title="${escapeHtml(item["상품명"])} 상세 보기">${escapeHtml(item["상품명"])}</button>
-        <div class="bar-track"><div class="cover-fill ${band.cls}" style="width:${width}%"></div></div>
-        <div class="bar-count">${text}</div>
-      </div>`;
-    })
-    .join("");
-
-  return `<div class="cover-block">
-    <div class="cover-head">
-      <strong>재고 소진 예상 (임박 순)</strong>
-      <span class="cover-note">잔여 재고 ÷ 이번 달 사용량 · 이번 달에 사용된 품목만</span>
-    </div>
-    <div class="chart-legend">
-      <span class="legend-item"><span class="legend-swatch cover danger"></span>1개월 미만</span>
-      <span class="legend-item"><span class="legend-swatch cover warn"></span>2개월 미만</span>
-      <span class="legend-item"><span class="legend-swatch cover ok"></span>여유</span>
-    </div>
-    <div class="bar-chart">${rows}</div>
-  </div>`;
+function coverText(months) {
+  if (months === null) return "-";
+  return months >= COVER_CAP ? "6개월 이상" : `약 ${months.toFixed(1)}개월치`;
 }
 
 /* 화면에 그린 재고 표의 품목을 팝업에서 다시 찾기 위해 보관합니다. */
 let TB_ITEMS = [];
 
-/* 재고 표. 기본 화면에는 품목 · 잔여 재고 · 상태만 두고,
-   사용량 · 입고량 · 전월 재고는 품목을 눌렀을 때 팝업으로 보여줍니다. */
+/* 재고 표 하나로 모두 봅니다.
+   - 품목 앞의 점 = 소진 임박 정도 (칸 안의 막대·글자와 같은 뜻이라, 색을 못 읽어도 됩니다)
+   - 잔여 재고 / 상태(발주 필요) / 소진 예상까지 한 줄에
+   - 사용량 · 입고량 · 전월 재고는 품목을 눌러 팝업으로
+   정렬은 '급한 순'입니다. 시트 순서대로 보면 발주할 것을 찾으려고 눈이 위아래로 헤매게 됩니다. */
 function stockTable(items) {
   if (!items.length) {
     return `<div class="empty-note">탕비실 데이터를 불러오지 못했습니다.</div>`;
   }
-  TB_ITEMS = items;
-  const rows = items
+
+  // 시트에서 빨갛게 칠한 '발주 필요'는 계산과 상관없이 맨 위로 올립니다.
+  const rank = (i) =>
+    i["발주필요"] ? -1 : COVER_BANDS.indexOf(coverBand(coverMonths(i)));
+
+  const sorted = items
+    .slice()
+    .sort((a, b) => {
+      const d = rank(a) - rank(b);
+      if (d !== 0) return d;
+      const ma = coverMonths(a), mb = coverMonths(b);
+      if (ma === null) return mb === null ? 0 : 1;
+      if (mb === null) return -1;
+      return ma - mb;
+    });
+
+  TB_ITEMS = sorted;
+
+  const need = items.filter((i) => i["발주필요"]).length;
+  const legend = `<div class="stock-legend">
+    <span class="sl-count">전체 ${items.length}종 · 정상 ${items.length - need}종 · <strong>발주 필요 ${need}종</strong></span>
+    <span class="sl-dots">
+      ${COVER_BANDS.map(
+        (b) => `<span class="legend-item"><span class="dot ${b.cls}"></span>${b.label}</span>`
+      ).join("")}
+    </span>
+  </div>`;
+
+  const rows = sorted
     .map((i, idx) => {
-      const need = i["발주필요"];
-      const badge = need
+      const months = coverMonths(i);
+      const band = coverBand(months);
+      const width = months === null ? 0 : Math.max(Math.min(months / COVER_CAP, 1) * 100, 3);
+      const badge = i["발주필요"]
         ? `<span class="badge warn">발주 필요</span>`
         : `<span class="badge done">정상</span>`;
-      return `<tr class="row-clickable ${need ? "row-alert" : ""}" data-tb-row="${idx}">
-        <td class="cell-strong" title="${escapeHtml(i["상품명"])}">${escapeHtml(i["상품명"])}</td>
-        <td class="num cell-stock ${need ? "danger" : ""}">${escapeHtml(i["현재고"] ?? "-")}</td>
+      return `<tr class="row-clickable ${i["발주필요"] ? "row-alert" : ""}" data-tb-row="${idx}">
+        <td class="cell-strong" title="${escapeHtml(i["상품명"])} · ${band.label}">
+          <span class="dot ${band.cls}" aria-hidden="true"></span>${escapeHtml(i["상품명"])}
+        </td>
+        <td class="num cell-stock ${i["발주필요"] ? "danger" : ""}">${escapeHtml(i["현재고"] ?? "-")}</td>
         <td>${badge}</td>
+        <td class="cover-cell">
+          <div class="cover-wrap">
+            <span class="cover-mini"><span class="cover-fill ${band.cls}" style="width:${width}%"></span></span>
+            <span class="cover-text ${months === null ? "muted" : ""}">${coverText(months)}</span>
+          </div>
+        </td>
       </tr>`;
     })
     .join("");
-  return `<div class="table-hint">품목을 누르면 사용량 · 입고량 · 전월 재고를 볼 수 있습니다.</div>
+
+  return `${legend}
+    <div class="table-hint">소진이 급한 순 · 품목을 누르면 사용량 · 입고량 · 전월 재고를 볼 수 있습니다.
+      (소진 예상 = 잔여 재고 ÷ 이번 달 사용량)</div>
     <div class="table-scroll"><table class="data-table stock-table">
-    <thead><tr><th>상품명</th><th class="num">잔여 재고</th><th>상태</th></tr></thead>
+    <thead><tr>
+      <th>상품명</th><th class="num">잔여 재고</th><th>상태</th><th class="cover-th">재고 소진 예상</th>
+    </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }
@@ -1459,8 +1460,7 @@ function openTangbisilItem(item) {
   const deltaText =
     typeof delta === "number" ? (delta > 0 ? `+${delta}` : String(delta)) : "-";
   const months = coverMonths(item);
-  const coverText =
-    months === null ? "-" : months >= 6 ? "6개월 이상" : `약 ${months.toFixed(1)}개월치`;
+  const band = coverBand(months);
   const need = item["발주필요"];
 
   const line = (k, v, cls) =>
@@ -1480,17 +1480,14 @@ function openTangbisilItem(item) {
        ${line("전월 대비 사용량", deltaText,
               typeof delta === "number" && delta !== 0 ? (delta > 0 ? "delta up" : "delta down") : "")}
        ${line("박스당 개입수", numText(item["박스당개입수"]))}
-       ${line("재고 소진 예상", coverText)}
+       ${line("재고 소진 예상",
+              `<span class="dot ${band.cls}"></span>${escapeHtml(coverText(months))}` +
+              (months === null ? "" : ` <span class="muted">(${band.label})</span>`))}
      </div>`
   );
 }
 
 els.content.addEventListener("click", (e) => {
-  const byName = e.target.closest("[data-tb-name]");
-  if (byName) {
-    openTangbisilItem(TB_ITEMS.find((i) => i["상품명"] === byName.dataset.tbName));
-    return;
-  }
   const row = e.target.closest("tr[data-tb-row]");
   if (row) openTangbisilItem(TB_ITEMS[Number(row.dataset.tbRow)]);
 });
