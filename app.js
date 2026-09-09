@@ -30,6 +30,15 @@ let ENCRYPTED_BLOB = null;
 let MAIL_MODAL_KIND = null; // 메일룸 팝업이 열려 있으면 그 대장 키
 let CURRENT_VIEW = "overview";
 
+/* 팝업에서 '이전/다음' 행으로 넘어가기 위한 정보.
+   팝업을 새로 열 때마다 지워지고, 행 상세를 그린 쪽에서 다시 채웁니다.
+   (지워두지 않으면 다른 종류의 팝업에서 방향키가 엉뚱한 행을 엽니다) */
+let MODAL_NAV = null;
+
+/* 행을 누른 표의 '화면에 보이는 순서'. 정렬을 바꿔 놓은 뒤에도
+   '다음'이 화면에서 아래 있는 행이 되도록 기억해 둡니다. */
+let NAV_ORDER = null;
+
 /* 자동 갱신에 쓰려고 비밀번호를 기억해 둡니다.
    브라우저 메모리에만 있고 저장·전송되지 않습니다 (탭을 닫으면 사라집니다). */
 let PASSPHRASE = null;
@@ -79,7 +88,9 @@ async function tryUnlock() {
     els.lockOverlay.style.display = "none";
     els.appRoot.style.display = "";
     els.lastUpdated.textContent = "마지막 업데이트: " + formatDateTime(WORKBOARD.generated_at);
-    renderView("overview");
+    // 주소에 #jeonsan 처럼 화면 이름이 남아 있으면 그 화면부터 엽니다.
+    // (새로고침하거나 즐겨찾기로 들어와도 보던 화면이 유지됩니다)
+    applyView(viewFromHash() || "overview", true);
     refreshAdminBadge();
     startAutoRefresh();
   } catch (err) {
@@ -112,14 +123,40 @@ els.hamburgerBtn.addEventListener("click", () => {
   els.sidebar.classList.toggle("collapsed");
 });
 
+/* ---------------- 화면 주소 기억 (#jeonsan) ---------------- */
+
+/* 주소 끝의 #이름을 읽습니다. 우리가 아는 화면 이름이 아니면 null.
+   (남이 보낸 이상한 주소로 빈 화면이 뜨는 것을 막습니다) */
+function viewFromHash() {
+  const name = decodeURIComponent(String(location.hash || "").replace(/^#/, "")).trim();
+  return VIEW_TITLES[name] ? name : null;
+}
+
+/* 화면 하나를 여는 유일한 통로입니다. 사이드바 표시 · 제목 · 주소(#)를 함께 맞춥니다.
+   writeHash=false 는 '주소가 이미 그 화면이라 다시 쓸 필요가 없을 때'(뒤로 가기 등)입니다. */
+function applyView(view, writeHash) {
+  if (!VIEW_TITLES[view]) view = "overview";
+  els.navItems.forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+  els.pageTitle.textContent = VIEW_TITLES[view] || "";
+  renderView(view);
+  if (writeHash && location.hash.replace(/^#/, "") !== view) {
+    // 처음 들어올 때(주소에 #이 없을 때)는 방문 기록을 남기지 않고 조용히 바꿉니다.
+    // 그래야 뒤로 가기를 눌렀을 때 대시보드 안에서 헛걸음하지 않습니다.
+    if (!location.hash) history.replaceState(null, "", "#" + view);
+    else location.hash = view;
+  }
+}
+
 els.navItems.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    els.navItems.forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    const view = btn.dataset.view;
-    els.pageTitle.textContent = VIEW_TITLES[view] || "";
-    renderView(view);
-  });
+  btn.addEventListener("click", () => applyView(btn.dataset.view, true));
+});
+
+/* 뒤로/앞으로 가기, 주소를 직접 고친 경우.
+   지금 보고 있는 화면과 같으면 다시 그리지 않습니다(사이드바 클릭 때 두 번 그리는 것 방지). */
+window.addEventListener("hashchange", () => {
+  if (!PASSPHRASE) return; // 아직 잠금 화면이면 나중에 열 때 반영됩니다
+  const view = viewFromHash() || "overview";
+  if (view !== CURRENT_VIEW) applyView(view, false);
 });
 
 async function init() {
@@ -150,6 +187,7 @@ function formatDateTime(iso) {
 
 function openModal(title, bodyHtml) {
   MAIL_MODAL_KIND = null; // 메일룸 팝업이 아니면 그쪽 클릭 처리를 꺼둡니다
+  MODAL_NAV = null; // 이전/다음도 마찬가지. 상세를 그린 쪽에서 다시 켭니다
   els.modalTitle.textContent = title;
   els.modalBody.innerHTML = bodyHtml;
   els.modalBackdrop.hidden = false;
@@ -170,6 +208,115 @@ els.modalBackdrop.addEventListener("click", (e) => {
 });
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !els.modalBackdrop.hidden) closeModal();
+});
+
+/* ---------------- 팝업 안에서 이전/다음 행 ---------------- */
+
+/* 상세 팝업 맨 위에 붙는 이동 줄.
+   위치를 "3 / 12" 글자로 같이 적어, 버튼이 흐려진 것만으로 끝을 알리지 않게 합니다. */
+function navBar(pos, total) {
+  if (!total || total < 2) return "";
+  return `<div class="row-nav">
+    <button class="row-nav-btn" data-row-nav="-1" ${pos <= 1 ? "disabled" : ""}
+            title="이전 행 (← 방향키)">◀ 이전</button>
+    <span class="row-nav-pos">${pos} / ${total}</span>
+    <button class="row-nav-btn" data-row-nav="1" ${pos >= total ? "disabled" : ""}
+            title="다음 행 (→ 방향키)">다음 ▶</button>
+  </div>`;
+}
+
+/* 표시 순서(NAV_ORDER)가 있으면 그 순서로, 없으면 자료에 담긴 순서로 셉니다. */
+function navSequence(total) {
+  return NAV_ORDER && NAV_ORDER.length === total
+    ? NAV_ORDER
+    : Array.from({ length: total }, (_, i) => i);
+}
+
+function navPosition(index, total) {
+  const seq = navSequence(total);
+  const at = seq.indexOf(index);
+  return { pos: (at === -1 ? index : at) + 1, total };
+}
+
+/* 지금 보고 있는 행에서 step(-1/1)만큼 움직인 '원래 행 번호'. 끝이면 null. */
+function navStep(index, step, total) {
+  const seq = navSequence(total);
+  const at = seq.indexOf(index);
+  const next = at === -1 ? index + step : seq[at + step];
+  return next === undefined || next === null ? null : next;
+}
+
+/* 팝업 종류마다 '다음 행'을 여는 방법이 달라서 한곳에 모아둡니다. */
+function stepModalRow(step) {
+  const nav = MODAL_NAV;
+  if (!nav) return;
+
+  if (nav.mode === "table") {
+    const state = TABLE_REGISTRY[nav.tableId];
+    if (!state) return;
+    const at = state.order.indexOf(nav.index);
+    const next = state.order[at + step];
+    if (next === undefined) return;
+    openTableRowModal(state, next);
+    return;
+  }
+
+  if (nav.mode === "tangbisil") {
+    const next = nav.index + step;
+    if (next < 0 || next >= TB_ITEMS.length) return;
+    openTangbisilItem(TB_ITEMS[next], next);
+    return;
+  }
+
+  if (nav.mode === "crew") {
+    const active = crewMatches(CREW_QUERY)
+      .filter((g) => g.rows.length)
+      .find((g) => g.key === CREW_TAB);
+    if (!active || CREW_ROW === null) return;
+    const next = navStep(CREW_ROW, step, active.rows.length);
+    if (next === null) return;
+    CREW_ROW = next;
+    refreshCrewModal();
+    return;
+  }
+
+  if (nav.mode === "somopum") {
+    if (SOM_ROW === null) return;
+    const next = navStep(SOM_ROW, step, SOM_MATCH.length);
+    if (next === null) return;
+    SOM_ROW = next;
+    refreshSomModal();
+    return;
+  }
+
+  if (nav.mode === "mail") {
+    const kind = nav.kind;
+    const state = MAIL_STATE[kind];
+    if (!state || state.row === null) return;
+    const next = navStep(state.row, step, state.match.length);
+    if (next === null) return;
+    state.row = next;
+    refreshMailModal(kind);
+  }
+}
+
+els.modalBody.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-row-nav]");
+  if (btn) stepModalRow(Number(btn.dataset.rowNav));
+});
+
+/* 방향키로도 넘길 수 있게 합니다. 글자를 입력하는 중에는 끄고요. */
+window.addEventListener("keydown", (e) => {
+  if (els.modalBackdrop.hidden || !MODAL_NAV) return;
+  const tag = document.activeElement ? document.activeElement.tagName : "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    stepModalRow(-1);
+  } else if (e.key === "ArrowRight") {
+    e.preventDefault();
+    stepModalRow(1);
+  }
 });
 
 /* 레코드 하나를 "항목: 값" 목록으로 펼쳐 보여줍니다. */
@@ -310,7 +457,7 @@ function escapeHtml(v) {
 
 /* ---------------- 표 ---------------- */
 
-/* 표에 그려진 행을 다시 찾아갈 수 있도록 보관합니다.
+/* 표에 그려진 행과 정렬 상태를 다시 찾아갈 수 있도록 보관합니다.
    화면을 새로 그릴 때마다 비웁니다. */
 let TABLE_REGISTRY = {};
 let TABLE_SEQ = 0;
@@ -350,6 +497,111 @@ function pick(record, ...names) {
   return "";
 }
 
+/* 정렬용 값으로 바꿉니다. 날짜 · 숫자 · 글자를 구분합니다.
+   한 표에 "2026. 9. 1", "1,234", "완료"가 섞여 있어서 전부 글자로 비교하면
+   10이 9보다 앞에 오고, 날짜도 연-월-일 순서로 서지 않습니다. */
+function sortKey(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text || text === "-") return { empty: true };
+  const date = parseKDate(text);
+  if (date) return { num: date.getTime() };
+  const clean = text.replace(/,/g, "");
+  if (/^-?\d+(?:\.\d+)?$/.test(clean)) return { num: Number(clean) };
+  return { text };
+}
+
+function compareKeys(a, b) {
+  if (a.empty || b.empty) {
+    if (a.empty && b.empty) return 0;
+    return a.empty ? 1 : -1; // 빈 칸은 오름·내림과 상관없이 늘 아래
+  }
+  if ("num" in a && "num" in b) return a.num - b.num;
+  if ("num" in a) return -1; // 숫자 · 날짜를 글자보다 앞에
+  if ("num" in b) return 1;
+  return a.text.localeCompare(b.text, "ko");
+}
+
+/* 표를 실제로 다시 그리지 않고, '그릴 순서'만 새로 만듭니다.
+   행 번호(data-row)는 원래 자료의 번호를 그대로 쓰기 때문에,
+   정렬을 바꿔도 행을 눌렀을 때 열리는 상세 내용이 어긋나지 않습니다. */
+function applyTableSort(state) {
+  const base = state.records.map((_, i) => i);
+  const col = state.sortCol === null ? null : state.cols[state.sortCol];
+  if (!col) {
+    state.order = base;
+    return;
+  }
+  const keys = state.records.map((r) => sortKey(r[col]));
+  state.order = base.sort((x, y) => {
+    const kx = keys[x];
+    const ky = keys[y];
+    if (kx.empty || ky.empty) return compareKeys(kx, ky) || x - y;
+    const d = compareKeys(kx, ky);
+    return d !== 0 ? d * state.sortDir : x - y; // 값이 같으면 원래 순서 유지
+  });
+}
+
+function tableHtml(state) {
+  const { id, records, cols, options, clickable } = state;
+
+  const thead =
+    "<tr>" +
+    cols
+      .map((c, ci) => {
+        const on = state.sortCol === ci;
+        // 화살표는 색이 아니라 모양으로 구분됩니다. ↕는 '정렬할 수 있다'는 뜻입니다.
+        const arrow = on ? (state.sortDir > 0 ? "▲" : "▼") : "↕";
+        const aria = on ? (state.sortDir > 0 ? "ascending" : "descending") : "none";
+        return `<th class="${isNumericColumn(c) ? "num " : ""}${on ? "sorted" : ""}" aria-sort="${aria}">
+          <button class="th-sort" data-sort-table="${id}" data-sort-col="${ci}"
+                  title="${escapeHtml(c)} 기준으로 정렬">
+            <span class="th-text">${escapeHtml(c)}</span><span class="th-arrow" aria-hidden="true">${arrow}</span>
+          </button>
+        </th>`;
+      })
+      .join("") +
+    "</tr>";
+
+  const body = state.order
+    .map((rowIdx) => {
+      const r = records[rowIdx];
+      const cells = cols
+        .map((c) => {
+          const raw = r[c] ?? "";
+          if (/상태|여부/.test(c)) return `<td>${statusCellHtml(raw)}</td>`;
+          const text = raw === "" ? "-" : String(raw);
+          // title 속성을 넣어두면 잘린 내용도 마우스를 올려 확인할 수 있습니다.
+          return `<td class="${isNumericColumn(c) ? "num" : ""}" title="${escapeHtml(text)}">${escapeHtml(text)}</td>`;
+        })
+        .join("");
+      // 반송 건처럼 눈에 띄어야 하는 행은 rowClass로 배경·왼쪽 띠를 줍니다.
+      const rowClass = [
+        clickable ? "row-clickable" : "",
+        options.rowClass ? options.rowClass(r) || "" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const attrs =
+        (rowClass ? ` class="${rowClass}"` : "") +
+        (clickable ? ` data-table="${id}" data-row="${rowIdx}"` : "");
+      return `<tr${attrs}>${cells}</tr>`;
+    })
+    .join("");
+
+  const sortedNote =
+    state.sortCol === null
+      ? ""
+      : ` 지금은 <strong>${escapeHtml(cols[state.sortCol])}</strong> ${
+          state.sortDir > 0 ? "오름차순" : "내림차순"
+        }입니다 (한 번 더 누르면 반대, 세 번째에 원래 순서).`;
+  const hint = `<div class="table-hint">${
+    clickable ? "행을 누르면 전체 내용을 볼 수 있습니다. " : ""
+  }열 머리글을 누르면 그 열 기준으로 정렬됩니다.${sortedNote}</div>`;
+
+  const centerClass = options.center ? " center-all" : "";
+  return `<div class="table-block" id="${id}">${hint}<div class="table-scroll"><table class="data-table${centerClass}"><thead>${thead}</thead><tbody>${body}</tbody></table></div></div>`;
+}
+
 function renderTable(records, columns, opts) {
   const options = opts || {};
   if (!records.length) {
@@ -381,60 +633,69 @@ function renderTable(records, columns, opts) {
   const cols = columns ? columns.map(findColumn).filter(Boolean) : available;
   if (!cols.length) return `<div class="empty-note">표시할 열이 없습니다.</div>`;
 
-  const clickable = options.clickable !== false;
-  const tableId = "tbl" + ++TABLE_SEQ;
-  if (clickable) {
-    TABLE_REGISTRY[tableId] = { records, title: options.detailTitle || "상세 내용" };
-  }
-
-  const thead =
-    "<tr>" +
-    cols
-      .map((c) => `<th class="${isNumericColumn(c) ? "num" : ""}">${escapeHtml(c)}</th>`)
-      .join("") +
-    "</tr>";
-
-  const body = records
-    .map((r, i) => {
-      const cells = cols
-        .map((c) => {
-          const raw = r[c] ?? "";
-          if (/상태|여부/.test(c)) return `<td>${statusCellHtml(raw)}</td>`;
-          const text = raw === "" ? "-" : String(raw);
-          // title 속성을 넣어두면 잘린 내용도 마우스를 올려 확인할 수 있습니다.
-          return `<td class="${isNumericColumn(c) ? "num" : ""}" title="${escapeHtml(text)}">${escapeHtml(text)}</td>`;
-        })
-        .join("");
-      // 반송 건처럼 눈에 띄어야 하는 행은 rowClass로 배경·왼쪽 띠를 줍니다.
-      const rowClass = [
-        clickable ? "row-clickable" : "",
-        options.rowClass ? options.rowClass(r) || "" : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const attrs =
-        (rowClass ? ` class="${rowClass}"` : "") +
-        (clickable ? ` data-table="${tableId}" data-row="${i}"` : "");
-      return `<tr${attrs}>${cells}</tr>`;
-    })
-    .join("");
-
-  const hint = clickable
-    ? `<div class="table-hint">행을 누르면 전체 내용을 볼 수 있습니다.</div>`
-    : "";
-
-  const centerClass = options.center ? " center-all" : "";
-  return `${hint}<div class="table-scroll"><table class="data-table${centerClass}"><thead>${thead}</thead><tbody>${body}</tbody></table></div>`;
+  // 정렬을 다시 그릴 때 필요한 것들을 한 덩어리로 보관합니다.
+  // (정렬은 화면 전체를 다시 그리지 않고 이 표만 다시 그립니다)
+  const state = {
+    id: "tbl" + ++TABLE_SEQ,
+    records,
+    cols,
+    options,
+    clickable: options.clickable !== false,
+    title: options.detailTitle || "상세 내용",
+    sortCol: null,
+    sortDir: 1,
+    order: records.map((_, i) => i),
+  };
+  TABLE_REGISTRY[state.id] = state;
+  return tableHtml(state);
 }
 
+/* 열 머리글을 눌렀을 때: 오름차순 → 내림차순 → 원래 순서로 돌아갑니다.
+   표 한 덩어리만 다시 그리므로, 화면 위치나 다른 표의 정렬은 그대로 남습니다.
+   본문과 팝업에 모두 표가 있어서 document에서 한 번에 받습니다. */
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-sort-table]");
+  if (!btn) return;
+  const state = TABLE_REGISTRY[btn.dataset.sortTable];
+  if (!state) return;
+
+  const col = Number(btn.dataset.sortCol);
+  if (state.sortCol === col) {
+    if (state.sortDir === 1) state.sortDir = -1;
+    else {
+      state.sortCol = null;
+      state.sortDir = 1;
+    }
+  } else {
+    state.sortCol = col;
+    state.sortDir = 1;
+  }
+
+  applyTableSort(state);
+  const box = document.getElementById(state.id);
+  if (box) box.outerHTML = tableHtml(state);
+});
+
 /* 표의 행을 눌렀을 때 팝업을 띄웁니다 (화면을 새로 그려도 계속 동작하도록 위임 처리). */
+function openTableRowModal(state, rowIdx) {
+  const record = state.records[rowIdx];
+  if (!record) return;
+  const at = state.order.indexOf(rowIdx);
+  openModal(
+    state.title,
+    navBar(at + 1, state.order.length) + recordDetailHtml(record)
+  );
+  // openModal이 지운 뒤에 다시 켭니다 (이전/다음 · 방향키용)
+  MODAL_NAV = { mode: "table", tableId: state.id, index: rowIdx };
+}
+
 els.content.addEventListener("click", (e) => {
   const row = e.target.closest("tr[data-table]");
   if (!row) return;
-  const source = TABLE_REGISTRY[row.dataset.table];
-  if (!source) return;
-  const record = source.records[Number(row.dataset.row)];
-  if (record) openModal(source.title, recordDetailHtml(record));
+  const state = TABLE_REGISTRY[row.dataset.table];
+  if (!state) return;
+  NAV_ORDER = state.order;
+  openTableRowModal(state, Number(row.dataset.row));
 });
 
 /* ---------------- 카드 ---------------- */
@@ -485,11 +746,16 @@ function renderView(view) {
   };
   CURRENT_VIEW = view;
   TABLE_REGISTRY = {}; // 이전 화면의 표 정보는 버립니다
+  NAV_ORDER = null;
   closeModal();
   stopNoticeRotation();
   const fn = renderers[view] || renderOverview;
   els.content.innerHTML = fn();
-  if (view === "overview") startNoticeRotation();
+  if (view === "overview") {
+    startNoticeRotation();
+    // 달력은 폭이 넓어 가로로 스크롤됩니다. 그려진 뒤에 오늘 칸이 보이도록 옮깁니다.
+    scrollCalendarToToday();
+  }
 }
 
 /* 이번 달 건수를 셉니다. 각 대장의 실제 날짜 열 이름을 넘겨받습니다.
@@ -933,9 +1199,53 @@ function schedulePanel() {
   </div>`;
 }
 
+/* 달력을 열면 오늘 칸이 보이는 자리로 가로 스크롤을 옮깁니다.
+   달력은 한 달 전체(1080px 이상)를 가로로 늘어놓기 때문에, 월 후반에는
+   오늘이 화면 밖에 있어서 매번 손으로 밀어야 했습니다.
+
+   - 보고 있는 달이 이번 달이 아닐 때는 1일부터 보이게 왼쪽 끝으로 둡니다.
+   - 왼쪽 크루 이름칸은 sticky로 떠 있어서, 그 폭만큼 빼고 가운데를 계산합니다. */
+function scrollCalendarToToday() {
+  // 글꼴이 늦게 적용되면 칸 폭이 조금 달라지므로, 한 번 그려진 다음에 위치를 잡습니다.
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(placeCalendarScroll);
+  } else {
+    placeCalendarScroll();
+  }
+}
+
+function placeCalendarScroll() {
+  const scroller = document.querySelector("#schedBox .cal-scroll");
+  if (!scroller) return;
+
+  const today = new Date();
+  if (SCHED_YEAR !== today.getFullYear() || SCHED_MONTH !== today.getMonth()) {
+    scroller.scrollLeft = 0;
+    return;
+  }
+
+  const cell = scroller.querySelector(".cal-head .cal-day.today");
+  if (!cell) return;
+
+  const nameCol = scroller.querySelector(".cal-head .cal-name");
+  const stickyWidth = nameCol ? nameCol.getBoundingClientRect().width : 0;
+  const cellBox = cell.getBoundingClientRect();
+  const viewBox = scroller.getBoundingClientRect();
+
+  // 지금 스크롤 위치를 기준으로, 오늘 칸을 '이름칸 오른쪽 영역'의 가운데에 놓습니다.
+  const room = scroller.clientWidth - stickyWidth - cellBox.width;
+  const target =
+    scroller.scrollLeft + (cellBox.left - viewBox.left) - stickyWidth - Math.max(room, 0) / 2;
+
+  scroller.scrollLeft = Math.max(0, target);
+}
+
 function redrawCalendar() {
   const box = document.getElementById("schedBox");
-  if (box) box.innerHTML = scheduleCalendar();
+  if (!box) return;
+  box.innerHTML = scheduleCalendar();
+  // 달을 바꿀 때마다 위치를 다시 잡습니다 (이번 달이면 오늘, 아니면 1일부터).
+  scrollCalendarToToday();
 }
 
 els.content.addEventListener("click", (e) => {
@@ -1479,9 +1789,11 @@ function crewModalBody() {
 
   const active = found.find((g) => g.key === CREW_TAB);
 
-  // ③ 행 상세
+  // ③ 행 상세 (목록으로 돌아가지 않고 이전/다음 행으로 바로 넘어갈 수 있습니다)
   if (active && CREW_ROW !== null && active.rows[CREW_ROW]) {
+    const at = navPosition(CREW_ROW, active.rows.length);
     return `<button class="modal-back" data-crew-back>◀ ${escapeHtml(active.label)} 목록으로</button>
+      ${navBar(at.pos, at.total)}
       ${recordDetailHtml(active.rows[CREW_ROW])}`;
   }
 
@@ -1519,6 +1831,8 @@ function refreshCrewModal() {
   const wide = CREW_TAB !== null && CREW_ROW === null;
   if (modal) modal.classList.toggle("modal-wide", wide);
   openModal(`${query} · 크루 조회`, crewModalBody());
+  // 행 상세를 보고 있을 때만 이전/다음을 켭니다 (openModal이 지운 뒤에 다시 켭니다)
+  if (CREW_TAB !== null && CREW_ROW !== null) MODAL_NAV = { mode: "crew" };
 }
 
 function openCrewModal() {
@@ -1583,6 +1897,9 @@ els.modalBody.addEventListener("click", (e) => {
   }
   const row = e.target.closest("tr[data-table]");
   if (row && CREW_TAB !== null) {
+    // 이전/다음이 '화면에 보이는 순서'대로 움직이게, 그 표의 정렬 순서를 기억합니다.
+    const state = TABLE_REGISTRY[row.dataset.table];
+    NAV_ORDER = state ? state.order : null;
     CREW_ROW = Number(row.dataset.row);
     refreshCrewModal();
   }
@@ -1883,8 +2200,8 @@ function stockTable(items) {
   </table></div>`;
 }
 
-/* 탕비실 품목 상세 팝업 */
-function openTangbisilItem(item) {
+/* 탕비실 품목 상세 팝업. index는 표에서 몇 번째 행인지(이전/다음 이동용)입니다. */
+function openTangbisilItem(item, index) {
   if (!item) return;
   const delta = item["사용량증감"];
   const deltaText =
@@ -1897,9 +2214,11 @@ function openTangbisilItem(item) {
     `<div class="detail-row"><div class="detail-key">${k}</div>
       <div class="detail-value ${cls || ""}">${v}</div></div>`;
 
+  const hasIndex = typeof index === "number";
   openModal(
     item["상품명"],
-    `<div class="modal-kpi">
+    `${hasIndex ? navBar(index + 1, TB_ITEMS.length) : ""}
+     <div class="modal-kpi">
        ${kpiCard("잔여 재고", numText(item["현재고"]) + "개", need ? "발주 필요" : "정상")}
        ${kpiCard("이번 달 사용량", numText(item["사용량"]) + "개")}
        ${kpiCard("이번 달 입고량", numText(item["입고량"]) + "개")}
@@ -1915,11 +2234,17 @@ function openTangbisilItem(item) {
               (months === null ? "" : ` <span class="muted">(${band.label})</span>`))}
      </div>`
   );
+  // 재고 표는 '급한 순'으로 이미 정렬돼 있어서, 이전/다음이 곧 급한 순서입니다.
+  if (hasIndex) MODAL_NAV = { mode: "tangbisil", index };
 }
 
 els.content.addEventListener("click", (e) => {
   const row = e.target.closest("tr[data-tb-row]");
-  if (row) openTangbisilItem(TB_ITEMS[Number(row.dataset.tbRow)]);
+  if (row) {
+    const idx = Number(row.dataset.tbRow);
+    NAV_ORDER = null; // 표에 그려진 순서 = TB_ITEMS 순서
+    openTangbisilItem(TB_ITEMS[idx], idx);
+  }
 });
 
 /* ---------------- 소모품 ---------------- */
@@ -2305,7 +2630,9 @@ function somModalBody() {
   if (!rows.length) return `<div class="empty-note">기록이 없습니다.</div>`;
 
   if (SOM_ROW !== null && rows[SOM_ROW]) {
+    const at = navPosition(SOM_ROW, rows.length);
     return `<button class="modal-back" data-som-back>◀ 목록으로</button>
+      ${navBar(at.pos, at.total)}
       ${recordDetailHtml(rows[SOM_ROW].raw)}`;
   }
 
@@ -2353,6 +2680,7 @@ function refreshSomModal() {
   const modal = document.querySelector(".modal");
   if (modal) modal.classList.toggle("modal-wide", SOM_ROW === null);
   openModal(`${SOM_QUERY.trim()} · 소모품 불출 내역`, somModalBody());
+  if (SOM_ROW !== null) MODAL_NAV = { mode: "somopum" };
 }
 
 function openSomModal() {
@@ -2434,6 +2762,7 @@ els.modalBody.addEventListener("click", (e) => {
   }
   const row = e.target.closest("tr[data-som-row]");
   if (row) {
+    NAV_ORDER = null; // 이 표는 자료에 담긴 순서대로 그립니다
     SOM_ROW = Number(row.dataset.somRow);
     refreshSomModal();
   }
@@ -2677,7 +3006,9 @@ function mailModalBody(kind) {
   if (!rows.length) return `<div class="empty-note">기록이 없습니다.</div>`;
 
   if (state.row !== null && rows[state.row]) {
+    const at = navPosition(state.row, rows.length);
     return `<button class="modal-back" data-mail-back>◀ 목록으로</button>
+      ${navBar(at.pos, at.total)}
       ${recordDetailHtml(rows[state.row])}`;
   }
 
@@ -2701,6 +3032,7 @@ function refreshMailModal(kind) {
   if (modal) modal.classList.toggle("modal-wide", state.row === null);
   openModal(`${state.query} · ${src.short} 조회`, mailModalBody(kind));
   MAIL_MODAL_KIND = kind; // openModal이 끈 뒤에 다시 켭니다
+  if (state.row !== null) MODAL_NAV = { mode: "mail", kind };
 }
 
 function openMailModal(kind) {
@@ -2775,6 +3107,8 @@ els.modalBody.addEventListener("click", (e) => {
   }
   const row = e.target.closest("tr[data-table]");
   if (row) {
+    const state = TABLE_REGISTRY[row.dataset.table];
+    NAV_ORDER = state ? state.order : null;
     MAIL_STATE[kind].row = Number(row.dataset.row);
     refreshMailModal(kind);
   }
