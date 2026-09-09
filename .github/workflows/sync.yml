@@ -26,10 +26,10 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - name: 저장소 코드 가져오기
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 파이썬 설치
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
