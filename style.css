@@ -1474,3 +1474,243 @@ table.data-table tbody tr.row-alert:hover td {
 .crew-panel h3.section-title {
   margin-bottom: 4px;
 }
+
+/* ---------- 검색 패널 여백 정리 ---------- */
+/* 조회 전에는 결과칸이 비어 있으므로 자리를 차지하지 않게 접어둡니다.
+   (같은 뜻의 안내 문구가 두 번 나오던 것도 없앴습니다) */
+.crew-result-box:empty { display: none; }
+.crew-panel .search-bar { margin-bottom: 0; }
+.crew-result-box:not(:empty) { margin-top: 16px; }
+
+/* ---------- 개요: 공지 띠 ---------- */
+/* 공지가 여러 개면 한 줄씩 위로 넘어갑니다. 마우스를 올리면 멈춥니다. */
+.notice-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  margin-bottom: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+}
+
+.notice-tag {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.notice-view {
+  flex: 1;
+  height: 24px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.notice-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.notice-item {
+  height: 24px;
+  line-height: 24px;
+  font-size: 13.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notice-item a { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.notice-item a:hover { color: var(--accent); }
+
+.notice-flag {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+
+.notice-dots {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.notice-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 0.2s ease;
+}
+
+.notice-dot.on { background: var(--accent); }
+
+/* 움직임을 불편해하는 사용자를 위해 전환 효과를 끕니다 */
+@media (prefers-reduced-motion: reduce) {
+  .notice-list { transition: none; }
+}
+
+/* ---------- 개요: 팀 스케줄 달력 ---------- */
+/* 크루를 세로로 세우고 날짜를 가로로 놓은 월간 일정판입니다.
+   막대 안에 유형 글자를 적어두어 색을 못 읽어도 내용이 전달되게 했습니다. */
+.cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 16px 20px 12px;
+}
+
+.cal-nav-btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cal-nav-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.cal-today-btn {
+  width: auto;
+  padding: 0 13px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.cal-title {
+  font-size: 15px;
+  font-weight: 800;
+  min-width: 108px;
+  text-align: center;
+}
+
+.cal-note {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.cal-scroll {
+  overflow-x: auto;
+  padding: 0 20px 6px;
+}
+
+.cal { min-width: 1080px; }
+
+.cal-row {
+  display: grid;
+  grid-template-columns: 148px repeat(var(--cal-days), minmax(30px, 1fr));
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.cal-row > * { grid-row: 1; }
+
+.cal-head { margin-bottom: 8px; }
+
+.cal-name {
+  grid-column: 1;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--surface);
+  padding-right: 12px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-head .cal-name { color: var(--text-soft); font-size: 11.5px; }
+
+.cal-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 5px 0 4px;
+  border-radius: 6px;
+}
+
+.cal-wd { font-size: 10.5px; color: var(--text-soft); }
+.cal-dd { font-size: 12px; font-weight: 700; color: var(--text); }
+
+/* 주말·공휴일 */
+.cal-day.off .cal-wd, .cal-day.off .cal-dd { color: var(--danger); }
+
+.cal-day.today { background: var(--accent); }
+.cal-day.today .cal-wd, .cal-day.today .cal-dd { color: #fff; }
+
+.cal-cell {
+  height: 30px;
+  box-shadow: inset -1px 0 0 var(--border);
+}
+
+.cal-cell.off { background: var(--surface-soft); }
+.cal-cell.today { background: var(--accent-soft); }
+
+.cal-bar {
+  height: 24px;
+  margin: 0 2px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  padding: 0 5px 0 8px;
+  border: 1px solid;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.cal-bar-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-bar:hover { filter: brightness(0.96); }
+
+.cal-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 20px 18px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.cal-swatch {
+  width: 24px;
+  height: 13px;
+  border-radius: 4px;
+  display: inline-block;
+  border: 1px solid var(--border);
+}
