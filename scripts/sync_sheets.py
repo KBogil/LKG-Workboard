@@ -5,6 +5,7 @@
 - config/sources.json 에 등록된 각 source마다:
     - gid가 있으면: 그 gid(탭 고유번호)에 해당하는 탭을 읽습니다.
     - dynamic_month가 true이면: "OO년 O월" 형식의 "이번 달" 탭을 자동으로 찾아 읽습니다.
+- 시트 하나가 실패해도(권한 없음, 탭 삭제, 서식 변경 등) 나머지는 계속 갱신됩니다.
 - 탕비실은 전용 처리(build_tangbisil_data)를 탑니다. A~F열은 고정 의미로 읽고,
   G열 이후의 "일자별 블록"은 위치를 하드코딩하지 않고 헤더에서 자동으로 찾아냅니다.
 - 소모품 "월별 불출량&검수" 탭도 전용 처리(build_somopum_stock)를 탑니다.
@@ -667,79 +668,103 @@ def main():
     meta_cache = {}
     data = {}
 
+    failed = []
+
     for key, source in config["sources"].items():
-        spreadsheet_id = source["spreadsheet_id"]
-        if spreadsheet_id not in meta_cache:
-            meta_cache[spreadsheet_id] = get_spreadsheet_meta(spreadsheet_id, access_token)
-        meta = meta_cache[spreadsheet_id]
+        try:
+            load_source(key, source, access_token, meta_cache, data)
+        except Exception:
+            # 시트 하나가 문제여도(권한 없음, 탭 삭제, 서식 변경 등) 나머지는 계속 갱신되도록
+            # 여기서 오류를 가둡니다. 이렇게 하지 않으면 워크플로 전체가 실패하고
+            # 매 실행마다 실패 알림 메일이 옵니다.
+            import traceback
+            print(f"[오류] {key}: 이 시트를 읽지 못했습니다. 아래 내용을 확인하세요.")
+            traceback.print_exc()
+            failed.append(key)
+            data.setdefault(key, [])
 
-        if key == "tangbisil":
-            # 탕비실은 처리가 복잡해서, 여기서 문제가 생겨도 다른 카테고리는
-            # 정상적으로 갱신되도록 오류를 가둬둡니다. 원인은 로그에 남깁니다.
-            try:
-                data[key] = build_tangbisil_data(spreadsheet_id, access_token, meta)
-            except Exception:
-                import traceback
-                print(f"[오류] 탕비실 처리 중 문제가 발생했습니다. 아래 내용을 확인하세요.")
-                traceback.print_exc()
-                data[key] = {"items": [], "days": [], "month_title": current_month_title(),
-                             "prev_month_title": None,
-                             "workdays_total": 0, "workdays_done": 0}
-            continue
+    if failed:
+        print(f"[요약] 읽지 못한 시트: {failed} — 나머지는 정상 갱신했습니다.")
 
-        if source.get("dynamic_month"):
-            title = find_month_tab(meta, 0)
-            if title is None:
-                available = [s["properties"]["title"] for s in meta.get("sheets", [])]
-                print(f"[경고] {key}: '{current_month_title()}' 탭을 찾지 못했습니다. "
-                      f"실제 탭 목록: {available}")
-                data[key] = []
-                continue
-        else:
-            title = find_title_by_gid(meta, source["gid"])
-            if title is None:
-                print(f"[경고] {key}: gid {source['gid']} 탭을 찾지 못했습니다.")
-                data[key] = []
-                continue
+    save_output(data)
 
-        rows = get_values(spreadsheet_id, title, access_token)
 
-        if source.get("special") == "board":
-            # 공지 + 스케줄이 한 탭에 좌우로 나뉘어 있어 전용 처리를 탑니다.
-            try:
-                board = build_board(rows)
-            except Exception:
-                import traceback
-                print("[오류] 공지/스케줄 시트 처리 중 문제가 발생했습니다.")
-                traceback.print_exc()
-                board = {"notice": [], "schedule": []}
-            data["notice"] = board["notice"]
-            data["schedule"] = board["schedule"]
-            # 열 이름을 로그에 남겨둡니다. 화면에 값이 안 뜨면 여기부터 확인하세요.
-            n_cols = list(board["notice"][0].keys()) if board["notice"] else []
-            s_cols = list(board["schedule"][0].keys()) if board["schedule"] else []
-            print(f"[완료] {key} ({title}): 공지 {len(board['notice'])}건 {n_cols} · "
-                  f"스케줄 {len(board['schedule'])}건 {s_cols}")
-            continue
+def load_source(key, source, access_token, meta_cache, data):
+    """source 하나를 읽어 data에 담습니다. 문제가 생기면 예외를 그대로 올려보냅니다."""
+    spreadsheet_id = source["spreadsheet_id"]
+    if spreadsheet_id not in meta_cache:
+        meta_cache[spreadsheet_id] = get_spreadsheet_meta(spreadsheet_id, access_token)
+    meta = meta_cache[spreadsheet_id]
 
-        if source.get("special") == "somopum_stock":
-            # 가로로 월 블록이 이어지는 시트라 전용 처리를 탑니다.
-            try:
-                stock = build_somopum_stock(rows)
-            except Exception:
-                import traceback
-                print("[오류] 소모품 월별 불출량 시트 처리 중 문제가 발생했습니다.")
-                traceback.print_exc()
-                stock = {"months": []}
-            data[key] = stock
-            summary = ", ".join(f"{m['label']} {len(m['items'])}품목" for m in stock["months"])
-            print(f"[완료] {key} ({title}): {summary or stock.get('note', '읽은 월 없음')}")
-            continue
+    if key == "tangbisil":
+        # 탕비실은 처리가 복잡해서, 여기서 문제가 생겨도 다른 카테고리는
+        # 정상적으로 갱신되도록 오류를 가둬둡니다. 원인은 로그에 남깁니다.
+        try:
+            data[key] = build_tangbisil_data(spreadsheet_id, access_token, meta)
+        except Exception:
+            import traceback
+            print(f"[오류] 탕비실 처리 중 문제가 발생했습니다. 아래 내용을 확인하세요.")
+            traceback.print_exc()
+            data[key] = {"items": [], "days": [], "month_title": current_month_title(),
+                         "prev_month_title": None,
+                         "workdays_total": 0, "workdays_done": 0}
+        return
 
-        records = rows_to_records(rows)
-        data[key] = records
-        print(f"[완료] {key} ({title}): {len(records)}건")
+    if source.get("dynamic_month"):
+        title = find_month_tab(meta, 0)
+        if title is None:
+            available = [s["properties"]["title"] for s in meta.get("sheets", [])]
+            print(f"[경고] {key}: '{current_month_title()}' 탭을 찾지 못했습니다. "
+                  f"실제 탭 목록: {available}")
+            data[key] = []
+            return
+    else:
+        title = find_title_by_gid(meta, source["gid"])
+        if title is None:
+            print(f"[경고] {key}: gid {source['gid']} 탭을 찾지 못했습니다.")
+            data[key] = []
+            return
 
+    rows = get_values(spreadsheet_id, title, access_token)
+
+    if source.get("special") == "board":
+        # 공지 + 스케줄이 한 탭에 좌우로 나뉘어 있어 전용 처리를 탑니다.
+        try:
+            board = build_board(rows)
+        except Exception:
+            import traceback
+            print("[오류] 공지/스케줄 시트 처리 중 문제가 발생했습니다.")
+            traceback.print_exc()
+            board = {"notice": [], "schedule": []}
+        data["notice"] = board["notice"]
+        data["schedule"] = board["schedule"]
+        # 열 이름을 로그에 남겨둡니다. 화면에 값이 안 뜨면 여기부터 확인하세요.
+        n_cols = list(board["notice"][0].keys()) if board["notice"] else []
+        s_cols = list(board["schedule"][0].keys()) if board["schedule"] else []
+        print(f"[완료] {key} ({title}): 공지 {len(board['notice'])}건 {n_cols} · "
+              f"스케줄 {len(board['schedule'])}건 {s_cols}")
+        return
+
+    if source.get("special") == "somopum_stock":
+        # 가로로 월 블록이 이어지는 시트라 전용 처리를 탑니다.
+        try:
+            stock = build_somopum_stock(rows)
+        except Exception:
+            import traceback
+            print("[오류] 소모품 월별 불출량 시트 처리 중 문제가 발생했습니다.")
+            traceback.print_exc()
+            stock = {"months": []}
+        data[key] = stock
+        summary = ", ".join(f"{m['label']} {len(m['items'])}품목" for m in stock["months"])
+        print(f"[완료] {key} ({title}): {summary or stock.get('note', '읽은 월 없음')}")
+        return
+
+    records = rows_to_records(rows)
+    data[key] = records
+    print(f"[완료] {key} ({title}): {len(records)}건")
+
+
+def save_output(data):
     # 달력에서 주말·공휴일을 회색으로 칠하려면 브라우저도 공휴일을 알아야 해서,
     # 파이썬이 계산한 올해·내년 공휴일 목록을 같이 담아 보냅니다.
     this_year, _ = month_of(0)
