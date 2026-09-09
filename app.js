@@ -1428,16 +1428,16 @@ function stockTable(items) {
         : `<span class="badge done">정상</span>`;
       return `<tr class="row-clickable ${i["발주필요"] ? "row-alert" : ""}" data-tb-row="${idx}">
         <td class="cell-strong" title="${escapeHtml(i["상품명"])} · ${band.label}">
-          <span class="dot ${band.cls}" aria-hidden="true"></span>${escapeHtml(i["상품명"])}
+          <span class="stock-name"><span class="dot ${band.cls}" aria-hidden="true"></span>${escapeHtml(i["상품명"])}</span>
         </td>
-        <td class="num cell-stock ${i["발주필요"] ? "danger" : ""}">${escapeHtml(i["현재고"] ?? "-")}</td>
-        <td>${badge}</td>
         <td class="cover-cell">
           <div class="cover-wrap">
             <span class="cover-mini"><span class="cover-fill ${band.cls}" style="width:${width}%"></span></span>
             <span class="cover-text ${months === null ? "muted" : ""}">${coverText(months)}</span>
           </div>
         </td>
+        <td class="cell-stock ${i["발주필요"] ? "danger" : ""}">${escapeHtml(i["현재고"] ?? "-")}</td>
+        <td>${badge}</td>
       </tr>`;
     })
     .join("");
@@ -1445,9 +1445,10 @@ function stockTable(items) {
   return `${legend}
     <div class="table-hint">소진이 급한 순 · 품목을 누르면 사용량 · 입고량 · 전월 재고를 볼 수 있습니다.
       (소진 예상 = 잔여 재고 ÷ 이번 달 사용량)</div>
-    <div class="table-scroll"><table class="data-table stock-table">
+    <div class="table-scroll"><table class="data-table stock-table center-all">
     <thead><tr>
-      <th>상품명</th><th class="num">잔여 재고</th><th>상태</th><th class="cover-th">재고 소진 예상</th>
+      <th class="col-name">상품명</th><th class="cover-th">재고 소진 예상</th>
+      <th class="col-stock">잔여 재고</th><th class="col-status">상태</th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
