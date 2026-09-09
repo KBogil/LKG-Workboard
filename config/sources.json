@@ -50,6 +50,12 @@
       "spreadsheet_id": "1EVPwbsmvUcfTFtRSsuTc3jF9XZdi3ELSvuz1WthKrRI",
       "gid": 1490894300,
       "label": "명함_네임플레이트"
+    },
+    "board": {
+      "spreadsheet_id": "14BGW9N3aum8lDmoCuREhYbW3SxAfgTOEdaf0HSRIuqQ",
+      "gid": 1680593838,
+      "special": "board",
+      "label": "공지_스케줄"
     }
   }
 }
