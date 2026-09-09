@@ -1893,3 +1893,233 @@ table.data-table tbody tr.row-total td {
 /* 상세 팝업에서 증감 값에도 표와 같은 색을 씁니다. */
 .detail-value.delta.up { color: var(--delta-up); font-weight: 700; }
 .detail-value.delta.down { color: var(--delta-down); font-weight: 700; }
+
+/* ---------- 사이드바: 관리자 알림 배지 ---------- */
+/* 화면에 들어가지 않아도 알림이 몇 건인지 보이게 합니다. */
+.nav-item .nav-badge {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.sidebar.collapsed .nav-badge {
+  /* 접었을 때는 아이콘 위에 작은 점으로 */
+  position: absolute;
+  margin: 0;
+  transform: translate(14px, -10px);
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+}
+
+.sidebar.collapsed .nav-admin { position: relative; }
+
+/* ---------- 새 데이터 알림 (상단) ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.refresh-pill {
+  padding: 7px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.refresh-pill:hover { background: var(--accent); color: #fff; }
+
+/* ---------- 개요: 오늘 확인할 것 ---------- */
+.todo-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px 18px;
+  margin-bottom: 24px;
+}
+
+.todo-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  font-size: 14.5px;
+}
+
+.todo-note { font-size: 12px; color: var(--text-soft); font-weight: 400; }
+
+.todo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.todo-item:hover { transform: translateY(-1px); }
+
+.todo-item.danger { border-left-color: var(--danger); background: #FDF4F1; }
+.todo-item.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+
+.todo-label { font-size: 13px; font-weight: 600; color: var(--text); }
+
+.todo-count {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.todo-item.danger .todo-count { color: var(--danger); }
+.todo-item.warn .todo-count { color: var(--warn); }
+
+.todo-unit { font-size: 12px; font-weight: 600; margin-left: 2px; }
+
+/* ---------- 관리자 알림 화면 ---------- */
+.admin-lock { padding: 18px 20px 20px; max-width: 420px; }
+
+.alert-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 20px 18px;
+}
+
+.alert-card {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--surface);
+}
+
+.alert-card.danger { border-left-color: var(--danger); background: #FDF4F1; }
+.alert-card.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+
+.alert-card-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.alert-chip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.alert-chip.danger { background: var(--danger); }
+.alert-chip.warn { background: var(--warn); }
+
+.alert-card-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-soft);
+  word-break: keep-all;
+}
+
+/* ---------- 전년 동월 대비 ---------- */
+.yoy-chart {
+  padding: 8px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.yoy-row {
+  display: grid;
+  grid-template-columns: 48px 1fr 108px;
+  align-items: center;
+  gap: 14px;
+}
+
+.yoy-month {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-soft);
+}
+
+.yoy-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.yoy-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.yoy-bar {
+  height: 11px;
+  border-radius: 999px;
+  display: block;
+  min-width: 0;
+  transition: width 0.25s ease;
+}
+
+.yoy-bar.cur { background: var(--accent); }
+.yoy-bar.prev { background: var(--delta-zero); }
+
+.yoy-num {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.yoy-num.muted { color: var(--text-soft); font-weight: 400; }
+
+.yoy-delta {
+  font-size: 12.5px;
+  font-weight: 700;
+  text-align: right;
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+.yoy-delta.up { color: var(--delta-up); }
+.yoy-delta.down { color: var(--delta-down); }
+.yoy-delta.muted { font-weight: 400; font-size: 11.5px; }
+
+.legend-swatch.yoy-cur { background: var(--accent); }
+.legend-swatch.yoy-prev { background: var(--delta-zero); }
+.chart-legend .legend-item.muted { color: var(--text-soft); }
