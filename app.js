@@ -928,18 +928,24 @@ function renderView(view) {
   }
 }
 
-/* 이번 달 건수를 셉니다. 각 대장의 실제 날짜 열 이름을 넘겨받습니다.
+/* 기준 달의 건수를 셉니다. back = 0 이면 이번 달, 1 이면 지난달, 2 면 그 전 달.
+   각 대장의 실제 날짜 열 이름을 넘겨받습니다.
    어떤 행에서도 날짜를 못 읽으면 null을 돌려줍니다.
    (예전에는 이 경우 '전체 건수'로 넘어가서, 월 기준이라면서 누적 숫자를 보여줬습니다) */
-function countThisMonth(records, ...fields) {
-  const now = new Date();
+function countMonthBack(records, back, ...fields) {
+  // 말일(31일)에서 setMonth로 한 달을 빼면 달이 통째로 건너뛰는 경우가 있어서
+  // 먼저 1일로 맞춘 뒤에 달을 뺍니다.
+  const ref = new Date();
+  ref.setDate(1);
+  ref.setMonth(ref.getMonth() - (back || 0));
+
   let readable = false;
   const n = records.filter((r) => {
     for (const f of fields) {
       const d = parseKDate(pick(r, f));
       if (d) {
         readable = true;
-        return isSameMonth(d, now);
+        return isSameMonth(d, ref);
       }
     }
     return false;
@@ -948,84 +954,644 @@ function countThisMonth(records, ...fields) {
   return readable ? n : null;
 }
 
+/* 이번 달 건수. 예전부터 쓰던 이름이라 그대로 두고 위 함수에 넘깁니다. */
+function countThisMonth(records, ...fields) {
+  return countMonthBack(records, 0, ...fields);
+}
+
+/* 최근 n개월(지난달부터 거슬러 올라가며) 평균 건수.
+   한 달이라도 날짜를 못 읽으면 평균을 내지 않고 null 입니다 —
+   못 읽은 달을 0으로 치면 평균이 실제보다 낮아져 "줄었다"로 잘못 읽힙니다. */
+function avgRecentMonths(records, n, ...fields) {
+  const vals = [];
+  for (let b = 1; b <= n; b++) {
+    const v = countMonthBack(records, b, ...fields);
+    if (v === null) return null;
+    vals.push(v);
+  }
+  if (!vals.length) return null;
+  return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+}
+
 function countLabel(n) {
   return n === null ? "-" : n + "건";
 }
 
+/* ---------------- 개요 ----------------
+
+   개요는 "상위 유관부서가 30초 안에 판단할 수 있는 화면"을 목표로 다시 짰습니다.
+   예전에 맨 위에 있던 담당자 카드 5장(직무별 업무 처리 현황)을 걷어내고 이 순서로 둡니다.
+
+     ① 상태 한 줄      — 닫아도 되는가 / 들여다봐야 하는가
+     ② 지난 방문 이후   — 내가 못 본 사이에 뭐가 달라졌나
+     ③ 공지 띠
+     ④ 팀 스케줄        — 담당자 카드가 있던 자리로 올렸습니다
+     ⑤ 이번 달 처리 현황 — 건수 + 지난달·3개월 평균 대비
+     ⑥ 탕비실 소진 예측
+     ⑦ 소모품 소진 예측
+     ⑧ 담당자 한 줄
+
+   담당자 이름을 지우지 않고 맨 아래로 옮긴 이유는, 문제가 생겼을 때
+   "누구한테 연락하지"는 반드시 필요한 정보이기 때문입니다. 자리만 바꿨습니다.
+   (ownerCard/.owner-grid 는 여기서 더 이상 쓰지 않지만 지우지 않았습니다.
+    다른 화면에서 다시 쓸 수 있고, 지우면 되돌리기가 번거롭습니다) */
 function renderOverview() {
   const now = new Date();
   const monthLabel = `${now.getFullYear()}년 ${now.getMonth() + 1}월`;
 
-  const tangbisil = getTangbisil();
-  const jeonsanCount = countThisMonth(getRecords("jeonsan_status"), "요청일자", "완료일자");
-  const somopumCount = countThisMonth(getRecords("somopum"), "날짜");
-  const vehicleCount = countThisMonth(getRecords("vehicle_log"), "운행일", "이용일", "일자", "날짜");
-  const postCount = countThisMonth(getRecords("mail_log"), "도달일");
-  const printCount = countThisMonth(getRecords("namecard"), "전달일");
-  const mailCount =
-    postCount === null && printCount === null ? null : (postCount || 0) + (printCount || 0);
-
-  // 구분별 건수 표시. 탕비실만 '진행일수 / 근무일수' 형태입니다.
-  const counts = {
-    전산: countLabel(jeonsanCount),
-    탕비실: tangbisil.workdays_total
-      ? `${tangbisil.workdays_done} / ${tangbisil.workdays_total}일`
-      : "-",
-    소모품: countLabel(somopumCount),
-    법인차량: countLabel(vehicleCount),
-    메일룸: countLabel(mailCount),
-  };
-
-  // 담당자는 시트에서 읽고, 그 구분이 시트에 없으면 기본값을 씁니다.
-  const owners = ownerMap();
-  const cards = OWNER_CATEGORIES.map((category) => {
-    const found = ownerOf(owners, category);
-    return ownerCard(
-      category,
-      found ? found.person : OWNER_FALLBACK[category] || "-",
-      counts[category],
-      found && found.note ? found.note : ""
-    );
-  });
-
-  // 시트에만 있는 구분(예: 플랜트박스)도 카드로 보여줍니다.
-  // 건수를 세는 방법은 구분마다 달라서, 아직 정해지지 않은 구분은 '-'로 둡니다.
-  Object.keys(owners)
-    .filter((k) => !OWNER_CATEGORIES.some((c) => normalizeColumn(c) === k))
-    .forEach((k) => {
-      const o = owners[k];
-      cards.push(ownerCard(o.label, o.person, "-", o.note || ""));
-    });
-
-  const ownerNote = Object.keys(owners).length
-    ? "담당자 이름은 시트의 '담당자' 탭에서 읽어옵니다."
-    : "";
-
   return `
-    <div class="banner-row">
-      <div class="banner-card">
-        <h2>LKG Workboard 개요</h2>
-        <p>${monthLabel} 기준 · 전산 · 탕비실 · 소모품 · 법인차량 · 메일룸 관리 현황을 한눈에 확인하세요.</p>
-      </div>
-      <div class="banner-side">
-        <h3>자동 업데이트</h3>
-        <p>구글 시트 입력 내용이 15분마다 자동으로 이 화면에 반영됩니다. 전체 누적 통계는 왼쪽 '연간 통계' 메뉴에서 확인하세요.</p>
-      </div>
-    </div>
-
+    ${statusStrip()}
+    ${sinceStrip()}
     ${noticeBar()}
-
-    <h2 class="section-title">직무별 업무 처리 현황</h2>
-    <p class="section-note">${monthLabel} 한 달 동안 처리된 건수입니다.${
-      ownerNote ? " " + ownerNote : ""
-    }</p>
-    <div class="owner-grid">
-      ${cards.join("")}
-    </div>
-
     ${schedulePanel()}
+
+    <h2 class="section-title">이번 달 처리 현황</h2>
+    <p class="section-note">${monthLabel} · 지난달, 최근 3개월 평균과 나란히 봅니다.
+      시트 입력은 15분마다 자동으로 반영됩니다.</p>
+    <div class="stat-grid">${statCards()}</div>
+
+    ${tangbisilForecastPanel()}
+    ${somopumForecastPanel()}
+
+    ${ownerLine()}
   `;
 }
+
+/* ---------------- ① 상태 한 줄 ----------------
+
+   🔔 관리자 알림 배지와 합치지 않습니다.
+   배지는 "시트가 고장났다"(열 이름이 바뀜 · 0건 · 90분 미갱신)이고,
+   이 줄은 "업무를 확인해야 한다"입니다. 한 숫자로 합치면 배지의 뜻이 흐려집니다. */
+function overviewAlerts() {
+  const out = [];
+
+  // 소진 예측에서 '다음 발주 회차 전에 이미 바닥나는 품목'을 그대로 가져옵니다.
+  // 예측 카드와 이 줄이 같은 계산을 쓰므로 두 화면의 숫자가 어긋나지 않습니다.
+  const tb = buildForecast(tangbisilCoverList(), tangbisilOrderDates(FC_ROUNDS + 1));
+  if (tb.overdue.length) {
+    out.push({ view: "tangbisil", text: "탕비실 발주 필요", n: tb.overdue.length, unit: "품목" });
+  }
+
+  const som = buildForecast(somopumCoverList(), somopumOrderDates(FC_ROUNDS + 1));
+  if (som.overdue.length) {
+    out.push({ view: "somopum", text: "소모품 소진 임박", n: som.overdue.length, unit: "품목" });
+  }
+
+  return out;
+}
+
+function statusStrip() {
+  const monthLabel = `${new Date().getMonth() + 1}월`;
+  const alerts = overviewAlerts();
+
+  // 이상이 없는 날에도 줄은 그대로 둡니다. 줄이 사라지면
+  // "확인했는데 아무 일 없음"과 "화면이 덜 그려짐"이 구분되지 않습니다.
+  if (!alerts.length) {
+    return `<div class="status-strip">
+      <span class="status-flag" aria-hidden="true">✓</span>
+      <div class="status-text">${monthLabel} 정상 운영<span class="status-sub">확인 필요 없음</span></div>
+      <div class="status-ok-note">지금 조치가 필요한 항목은 없습니다.</div>
+    </div>`;
+  }
+
+  const chips = alerts
+    .map(
+      (a) => `<button class="status-chip" data-go-view="${escapeHtml(a.view)}">
+        ${escapeHtml(a.text)} <b>${a.n}${a.unit}</b> <span class="chip-go" aria-hidden="true">→</span>
+      </button>`
+    )
+    .join("");
+
+  return `<div class="status-strip attention">
+    <span class="status-flag" aria-hidden="true">!</span>
+    <div class="status-text">${monthLabel} 정상 운영<span class="status-sub">확인 필요 ${alerts.length}건</span></div>
+    <div class="status-chips">${chips}</div>
+  </div>`;
+}
+
+/* ---------------- ② 지난 방문 이후 달라진 것 ----------------
+
+   방문한 '날'을 브라우저에만 남깁니다(localStorage). 시트에도 서버에도 쓰지 않으므로
+   "대시보드에서 시트에 쓰지 않는다"는 원칙 그대로입니다.
+
+   시각이 아니라 날짜만 쓰는 이유: 각 대장의 날짜 열이 '일' 단위라
+   "오후 3시 이후"를 셀 방법이 애초에 없습니다. 있는 척하지 않습니다.
+
+   기록이 없으면(첫 방문) 줄을 그리지 않고 오늘 날짜만 적어 둡니다.
+   "0건"으로 보여주면 첫 방문과 진짜 변화 없음이 구분되지 않습니다.
+
+   날짜는 사용자가 '모두 본 것으로 표시'를 눌렀을 때만 앞으로 갑니다.
+   화면을 열 때마다 자동으로 밀면, 하루에 두 번 열었을 때 줄이 그냥 사라집니다. */
+const VISIT_KEY = "lkg-workboard:last-visit-day";
+
+function ymdKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+function startOfToday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function readLastVisit() {
+  try {
+    const raw = localStorage.getItem(VISIT_KEY);
+    if (!raw) return null;
+    const d = new Date(raw + "T00:00:00");
+    return Number.isNaN(d.getTime()) ? null : d;
+  } catch (e) {
+    // 브라우저가 저장을 막아 둔 경우(사생활 보호 모드 등). 이 기능만 조용히 빠집니다.
+    return null;
+  }
+}
+
+function writeVisitToday() {
+  try {
+    localStorage.setItem(VISIT_KEY, ymdKey(startOfToday()));
+  } catch (e) {
+    /* 저장을 못 해도 나머지 화면은 그대로 돕니다 */
+  }
+}
+
+/* 기준일 '다음 날부터' 날짜가 찍힌 건수. 기준일 당일은 이미 본 것으로 봅니다. */
+function countSince(records, since, ...fields) {
+  return records.filter((r) => {
+    for (const f of fields) {
+      const d = parseKDate(pick(r, f));
+      if (d) return d.getTime() > since.getTime();
+    }
+    return false;
+  }).length;
+}
+
+function sinceStrip() {
+  const since = readLastVisit();
+  if (!since) {
+    writeVisitToday(); // 첫 방문 — 다음 방문부터 보이도록 오늘을 적어 둡니다
+    return "";
+  }
+  if (since.getTime() >= startOfToday().getTime()) return ""; // 오늘 이미 '본 것으로 표시'했습니다
+
+  const items = [];
+  const add = (label, n) => {
+    if (n > 0) {
+      items.push(`<span class="since-item">${label} <b>${n.toLocaleString()}</b></span>`);
+    }
+  };
+
+  const jeonsan = getRecords("jeonsan_status");
+  const mail = getRecords("mail_log");
+
+  add("새 전산 요청", countSince(jeonsan, since, "요청일자"));
+  add("전산 완료", countSince(jeonsan, since, "완료일자"));
+  add("소모품 불출", countSince(getRecords("somopum"), since, "날짜"));
+  add("우편 도착", countSince(mail, since, "도달일"));
+  add("우편 반송", countSince(mail.filter(isReturned), since, "도달일"));
+  add("인쇄물 전달", countSince(getRecords("namecard"), since, "전달일"));
+
+  if (!items.length) return ""; // 달라진 게 없으면 줄 자체를 그리지 않습니다
+
+  return `<div class="since-strip">
+    <span class="since-label">지난 방문 ${since.getMonth() + 1}월 ${since.getDate()}일 이후</span>
+    ${items.join("")}
+    <button class="since-mark" data-since-mark
+      title="오늘까지 본 것으로 기록합니다. 이 기록은 이 브라우저에만 남습니다.">모두 본 것으로 표시</button>
+  </div>`;
+}
+
+/* ---------------- ⑤ 이번 달 처리 현황 ---------------- */
+
+/* 증감 줄.
+   - 색만으로 알리지 않도록 화살표 글자(▲ ▼ —)와 숫자를 같이 씁니다.
+   - 초록·빨강을 쓰지 않습니다. 전산 요청이 늘어난 게 좋은 일인지 나쁜 일인지는
+     화면이 판단할 수 없습니다. style.css 의 --delta-up(앰버)/--delta-down(청록)을 씁니다.
+   - 3개월 평균을 같이 적는 이유: 지난달 하나만으로는 "이번 달만 튄 것"이 구분되지 않습니다. */
+function deltaHtml(cur, prev, avg, unit) {
+  const u = unit || "건";
+  if (cur === null || prev === null) {
+    return `<span class="avg">지난달과 비교할 수 없습니다 (날짜를 읽지 못한 자료)</span>`;
+  }
+  const d = cur - prev;
+  const cls = d > 0 ? "up" : d < 0 ? "down" : "zero";
+  const mark = d > 0 ? "▲" : d < 0 ? "▼" : "—";
+  const num =
+    d === 0 ? "변화 없음" : `${d > 0 ? "+" : "−"}${Math.abs(d).toLocaleString()}${u}`;
+  const avgText =
+    avg === null
+      ? `지난달 ${prev.toLocaleString()}`
+      : `지난달 ${prev.toLocaleString()} · 3개월 평균 ${avg.toLocaleString()}`;
+  return `<span class="${cls}">${mark} ${num}</span><span class="avg">${avgText}</span>`;
+}
+
+function statCard(label, value, delta) {
+  return `<div class="stat-card">
+    <div class="stat-label">${escapeHtml(label)}</div>
+    <div class="stat-value">${value}</div>
+    <div class="stat-delta">${delta}</div>
+  </div>`;
+}
+
+function statCards() {
+  const jeonsan = getRecords("jeonsan_status");
+  const somopum = getRecords("somopum");
+  const vehicle = getRecords("vehicle_log");
+  const post = getRecords("mail_log");
+  const print = getRecords("namecard");
+  const tb = getTangbisil();
+
+  const JF = ["요청일자", "완료일자"];
+  const VF = ["운행일", "이용일", "일자", "날짜"];
+  const cards = [];
+
+  const jCur = countThisMonth(jeonsan, ...JF);
+  cards.push(
+    statCard(
+      "전산",
+      countLabel(jCur),
+      deltaHtml(jCur, countMonthBack(jeonsan, 1, ...JF), avgRecentMonths(jeonsan, 3, ...JF))
+    )
+  );
+
+  // 탕비실만 '진행일수 / 근무일수' 형태입니다.
+  // 지난달 근무일 자료가 데이터에 없으므로 증감 대신 이번 달 진행률만 적습니다.
+  // (없는 값을 지어내지 않습니다)
+  const rate = tb.workdays_total
+    ? Math.round((tb.workdays_done / tb.workdays_total) * 100)
+    : null;
+  cards.push(
+    statCard(
+      "탕비실 진열",
+      tb.workdays_total ? `${tb.workdays_done} / ${tb.workdays_total}일` : "-",
+      rate === null
+        ? `<span class="avg">근무일 자료를 읽지 못했습니다</span>`
+        : `<span class="zero">— 근무일 대비 ${rate}%</span>
+           <span class="avg">${escapeHtml(tb.month_title || "")}</span>`
+    )
+  );
+
+  const sCur = countThisMonth(somopum, "날짜");
+  cards.push(
+    statCard(
+      "소모품 불출",
+      countLabel(sCur),
+      deltaHtml(sCur, countMonthBack(somopum, 1, "날짜"), avgRecentMonths(somopum, 3, "날짜"))
+    )
+  );
+
+  const vCur = countThisMonth(vehicle, ...VF);
+  cards.push(
+    statCard(
+      "법인차량 운행",
+      countLabel(vCur),
+      deltaHtml(vCur, countMonthBack(vehicle, 1, ...VF), avgRecentMonths(vehicle, 3, ...VF))
+    )
+  );
+
+  // 메일룸은 우편물 + 인쇄물 합계입니다. 한쪽이라도 날짜를 못 읽으면
+  // 합계도 내지 않습니다(반쪽짜리 숫자가 합계인 척하는 것을 막습니다).
+  const pCur = countThisMonth(post, "도달일");
+  const nCur = countThisMonth(print, "전달일");
+  const pPrev = countMonthBack(post, 1, "도달일");
+  const nPrev = countMonthBack(print, 1, "전달일");
+  const pAvg = avgRecentMonths(post, 3, "도달일");
+  const nAvg = avgRecentMonths(print, 3, "전달일");
+  const sum2 = (a, b) => (a === null || b === null ? null : a + b);
+  const mCur = sum2(pCur, nCur);
+  cards.push(
+    statCard(
+      "메일룸",
+      countLabel(mCur),
+      deltaHtml(mCur, sum2(pPrev, nPrev), sum2(pAvg, nAvg)) +
+        (mCur === null
+          ? ""
+          : `<span class="avg">우편 ${pCur.toLocaleString()} + 인쇄 ${nCur.toLocaleString()}</span>`)
+    )
+  );
+
+  return cards.join("");
+}
+
+/* ---------------- ⑥⑦ 소진 예측 (탕비실 · 소모품) ----------------
+
+   재고를 "지금 남은 양"이 아니라 "언제 바닥나는가"로 뒤집어 봅니다.
+   화면은 막대그래프가 아니라 발주 회차 카드 3장입니다.
+   관리자가 이 화면에서 실제로 하는 일이 "다음 발주에 무엇을 넣을까"라서,
+   회차 목록이 그대로 발주서가 되는 편이 한 번 해석해야 하는 막대보다 낫습니다.
+
+   규칙 두 가지
+   1) 품목을 '소진 예정일'이 아니라 '그 직전 발주 회차'에 넣습니다.
+      바닥나는 날에 주문하면 늦습니다.
+   2) 다음 회차 전에 이미 바닥나는 품목은 카드에 넣지 않고 ①의 상태 칩으로 보냅니다.
+      카드는 "아직 여유는 있지만 이번 회차에 같이 넣을 것"만 담습니다.
+
+   탕비실과 소모품을 굳이 두 화면으로 나눈 이유는 자료의 해상도가 다르기 때문입니다.
+   - 탕비실: 품목마다 현재고·사용량이 있어 2주 단위까지 쪼갤 근거가 있습니다.
+   - 소모품: 월별 스냅샷(잔여재고)뿐이라 원자료가 달 단위입니다.
+     2주로 쪼개면 없는 정밀도를 만들어내는 셈이 됩니다.
+
+   발주 주기가 바뀌면 아래 상수만 고치면 됩니다. */
+const TB_ORDER_CYCLE_DAYS = 14; // 탕비실: 2주에 한 번
+/* 기준일을 고정해 두는 이유: 오늘부터 세면 화면을 보는 날마다 회차 날짜가 달라져서
+   "지난주에 본 것과 다르다"가 됩니다. 고정된 날에서 14일씩 더해 항상 같은 날이 나오게 합니다. */
+const TB_ORDER_ANCHOR = new Date(2026, 0, 5); // 2026-01-05 (월요일)
+const SOM_ORDER_DAY = 25; // 소모품: 매월 25일
+
+const FC_ROUNDS = 6; // 앞으로 몇 회차까지 볼지
+const FC_CARDS = 3; // 그중 카드로 펼쳐 보여줄 회차 수
+const DAYS_PER_MONTH = 30.44; // 남은 '개월'을 날짜로 바꿀 때 쓰는 평균 한 달 길이
+const FC_LEADS = ["다음 발주", "그다음", "그 이후"];
+
+/* 탕비실 발주일: 기준일에서 14일씩. 오늘 이후 것부터 count 개. */
+function tangbisilOrderDates(count) {
+  const today = startOfToday().getTime();
+  const step = TB_ORDER_CYCLE_DAYS * 86400000;
+  let t = TB_ORDER_ANCHOR.getTime();
+  if (t < today) {
+    // 한 번에 건너뛰어 계산합니다(1월부터 하루씩 세지 않도록).
+    t += Math.ceil((today - t) / step) * step;
+  }
+  const out = [];
+  for (let i = 0; i < count; i++) out.push(new Date(t + i * step));
+  return out;
+}
+
+/* 소모품 발주일: 매월 SOM_ORDER_DAY 일. 오늘 이후 것부터 count 개. */
+function somopumOrderDates(count) {
+  const today = startOfToday().getTime();
+  const out = [];
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(1); // 말일에서 달을 더할 때 날짜가 밀리는 것을 막습니다
+  while (out.length < count) {
+    const day = new Date(d.getFullYear(), d.getMonth(), SOM_ORDER_DAY);
+    if (day.getTime() >= today) out.push(day);
+    d.setMonth(d.getMonth() + 1);
+  }
+  return out;
+}
+
+/* 탕비실 품목별 남은 개월. coverMonths() = 현재고 ÷ 이번 달 사용량 을 그대로 씁니다.
+   시트에서 사람이 빨갛게 표시한 '발주필요'는 계산과 상관없이 급한 것으로 봅니다. */
+function tangbisilCoverList() {
+  return (getTangbisil().items || [])
+    .map((i) => ({
+      name: String(i["상품명"] || "").trim(),
+      months: coverMonths(i),
+      urgent: !!i["발주필요"],
+    }))
+    .filter((x) => x.name);
+}
+
+/* 소모품 품목별 남은 개월 = 최신 월의 잔여재고 ÷ 최근 3개월 평균 불출량.
+   그 기간에 불출 기록이 없으면 속도를 낼 수 없으므로 null(예측 불가)로 둡니다.
+   0으로 치면 "재고가 무한히 간다"가 되어 조용히 빠져버립니다. */
+function somopumCoverList() {
+  const stock = somopumStock();
+  if (!stock.months.length) return [];
+  const recent = stock.months.slice(-3);
+  const last = stock.months[stock.months.length - 1];
+
+  return (last.items || [])
+    .map((it) => {
+      const name = String(it["품목"] || "").trim();
+      let sum = 0;
+      let n = 0;
+      recent.forEach((m) => {
+        const row = (m.items || []).find((x) => x["품목"] === name);
+        const v = Number(row && row["불출량"]);
+        if (Number.isFinite(v)) {
+          sum += v;
+          n += 1;
+        }
+      });
+      const rate = n ? sum / n : 0; // 한 달 평균 불출량
+      const left = Number(it["잔여재고"]);
+      return {
+        name,
+        months: rate > 0 && Number.isFinite(left) ? left / rate : null,
+        urgent: false,
+      };
+    })
+    .filter((x) => x.name);
+}
+
+/* 남은 개월 목록을 발주 회차에 나눠 담습니다.
+   dates 는 회차 날짜 (count + 1) 개 — 마지막 하나는 "여기까지가 예측 범위"라는 경계로만 씁니다. */
+function buildForecast(list, dates) {
+  const today = startOfToday().getTime();
+  const rounds = dates.slice(0, dates.length - 1).map((d, i) => ({ date: d, idx: i, items: [] }));
+  const horizon = dates[dates.length - 1].getTime();
+  const overdue = [];
+  const unknown = [];
+
+  list.forEach((it) => {
+    if (it.months === null || !Number.isFinite(it.months)) {
+      unknown.push(it);
+      return;
+    }
+    const outAt = today + it.months * DAYS_PER_MONTH * 86400000;
+
+    // 다음 회차 전에 이미 바닥나거나, 시트에 '발주필요'로 표시된 품목.
+    // 예측이 아니라 지금 조치할 일이므로 ①의 상태 칩으로 넘깁니다.
+    if (it.urgent || outAt < rounds[0].date.getTime()) {
+      overdue.push(it);
+      return;
+    }
+    if (outAt >= horizon) return; // 예측 범위 밖 — 아직 볼 필요가 없습니다
+
+    // 소진 예정일보다 앞선 회차 중 가장 늦은 것 = 바닥나기 직전 발주 회차
+    let idx = 0;
+    for (let i = 0; i < rounds.length; i++) {
+      if (rounds[i].date.getTime() <= outAt) idx = i;
+    }
+    rounds[idx].items.push(it);
+  });
+
+  rounds.forEach((r) => r.items.sort((a, b) => a.months - b.months)); // 급한 순
+  return { rounds, overdue, unknown, count: list.length };
+}
+
+function fcWhenLong(d) {
+  return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+}
+
+function fcWhenShort(d) {
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function fcLeftText(months) {
+  return months === null ? "-" : `${months.toFixed(1)}개월`;
+}
+
+/* 회차 카드 하나.
+   첫 카드만 테두리를 굵게 하되, '다음 발주'라는 글자와 맨 왼쪽이라는 자리로도
+   구분되게 합니다(색만으로 정보를 전달하지 않기). */
+function forecastCard(round, i, coversText) {
+  const rows = round.items.length
+    ? round.items
+        .map(
+          (it) => `<li>
+            <span class="fc-item-name" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</span>
+            <span class="fc-item-left">${fcLeftText(it.months)}</span>
+          </li>`
+        )
+        .join("")
+    : `<li class="fc-none">이 회차에 넣을 품목이 없습니다</li>`;
+
+  return `<div class="fc-card${i === 0 ? " next" : ""}">
+    <div class="fc-card-lead">${FC_LEADS[i] || "이후"}</div>
+    <div class="fc-card-when">${fcWhenLong(round.date)}<small>${escapeHtml(coversText)}</small></div>
+    <div class="fc-card-n">${round.items.length}품목</div>
+    <ul class="fc-card-list">
+      <li class="head"><span class="fc-item-name">품목</span><span class="fc-item-left">남은 기간</span></li>
+      ${rows}
+    </ul>
+  </div>`;
+}
+
+function forecastPanel(cfg) {
+  const fc = cfg.fc;
+  const header = `<div class="panel-header">
+      <h2>${escapeHtml(cfg.title)}</h2>
+      <span class="panel-meta">${escapeHtml(cfg.meta)}</span>
+    </div>`;
+
+  // 품목이 없는 회차는 카드로 만들지 않습니다.
+  // "다음 발주 · 0품목" 카드가 자리를 차지하면 정작 발주할 회차가 밀려납니다.
+  // 그래서 '다음 발주'는 달력상 다음 회차가 아니라 '실제로 넣을 게 있는 가장 가까운 회차'입니다.
+  const active = fc.rounds.filter((r) => r.items.length);
+
+  // 자료 자체가 없을 때 (아직 못 불러왔거나 품목이 0종)
+  if (!fc.count) {
+    return `<div class="panel">${header}
+      <div class="panel-body"><div class="empty-note">${escapeHtml(cfg.empty)}</div></div>
+    </div>`;
+  }
+
+  // 자료는 있는데 예측 범위 안에 발주할 것이 없을 때.
+  // 예측 불가 품목 수는 이때도 숨기지 않습니다.
+  if (!active.length) {
+    return `<div class="panel">${header}
+      <div class="panel-body">
+        <div class="empty-note">${escapeHtml(cfg.span)} 안에 발주가 필요한 품목이 없습니다.${
+          fc.unknown.length ? ` (${escapeHtml(cfg.unknown)} ${fc.unknown.length}품목)` : ""
+        }</div>
+      </div>
+    </div>`;
+  }
+
+  const cards = active
+    .slice(0, FC_CARDS)
+    .map((r, i) => forecastCard(r, i, cfg.covers(r)))
+    .join("");
+
+  const later = active.slice(FC_CARDS);
+  const laterText = later.length
+    ? later.map((r) => `${fcWhenShort(r.date)} <b>${r.items.length}품목</b>`).join(" · ")
+    : "없습니다";
+  const total = fc.rounds.reduce((a, r) => a + r.items.length, 0);
+
+  // 예측할 수 없는 품목은 숨기지 않고 숫자로 남깁니다.
+  // 조용히 빼면 "발주할 게 이것뿐"으로 잘못 읽힙니다.
+  const unknownText = fc.unknown.length
+    ? ` · ${escapeHtml(cfg.unknown)} <b>${fc.unknown.length}품목</b>`
+    : "";
+
+  return `<div class="panel">${header}
+    <div class="panel-body">
+      <div class="fc-cards">${cards}</div>
+      <p class="fc-rest">
+        <span class="fc-rest-tag">이후 회차</span>${laterText}<br>
+        <span class="fc-rest-tag">합계</span>${escapeHtml(cfg.span)} 안에 발주할 품목 <b>${total}품목</b>${unknownText}
+      </p>
+    </div>
+  </div>`;
+}
+
+function tangbisilForecastPanel() {
+  const dates = tangbisilOrderDates(FC_ROUNDS + 1);
+  const weeks = TB_ORDER_CYCLE_DAYS / 7;
+  return forecastPanel({
+    title: "탕비실 소진 예측",
+    meta: `현재고 ÷ 사용량 기준 · 발주 주기 ${weeks}주`,
+    span: `앞으로 ${FC_ROUNDS * weeks}주`,
+    unknown: "사용 기록이 없어 예측할 수 없는 품목",
+    empty: "탕비실 재고 자료를 아직 불러오지 못했습니다.",
+    fc: buildForecast(tangbisilCoverList(), dates),
+    covers: (r) => {
+      // 이 회차에 주문한 것이 다음 회차 전날까지를 덮습니다.
+      const end = new Date(dates[r.idx + 1].getTime() - 86400000);
+      return `${fcWhenShort(r.date)}~${fcWhenShort(end)} 소진 예정`;
+    },
+  });
+}
+
+function somopumForecastPanel() {
+  const dates = somopumOrderDates(FC_ROUNDS + 1);
+  return forecastPanel({
+    title: "소모품 소진 예측",
+    meta: `최근 3개월 평균 불출량 기준 · 매월 ${SOM_ORDER_DAY}일 발주`,
+    span: `앞으로 ${FC_ROUNDS}개월`,
+    unknown: "최근 3개월 불출 기록이 없어 예측할 수 없는 품목",
+    empty: "소모품 월별 재고 자료를 아직 불러오지 못했습니다.",
+    fc: buildForecast(somopumCoverList(), dates),
+    covers: (r) => {
+      // 달 말에 주문한 것은 대개 다음 달에 쓰입니다.
+      const m = new Date(r.date.getFullYear(), r.date.getMonth() + 1, 1);
+      return `${m.getMonth() + 1}월 중 소진 예정`;
+    },
+  });
+}
+
+/* ---------------- ⑧ 담당자 한 줄 ----------------
+
+   담당자 카드 5장은 없앴지만 이름 자체는 남깁니다.
+   문제가 생겼을 때 "누구한테 연락하지"는 반드시 필요한 정보이고,
+   시트에서 읽어오므로(build_owners) 유지 비용도 없습니다. 자리만 맨 아래로 옮겼습니다. */
+function ownerLine() {
+  const owners = ownerMap();
+  const parts = OWNER_CATEGORIES.map((category) => {
+    const found = ownerOf(owners, category);
+    return {
+      label: category,
+      who: found ? found.person : OWNER_FALLBACK[category] || "-",
+    };
+  });
+
+  // 시트에만 있는 구분(예: 플랜트박스)도 뒤에 붙입니다.
+  Object.keys(owners)
+    .filter((k) => !OWNER_CATEGORIES.some((c) => normalizeColumn(c) === k))
+    .forEach((k) => parts.push({ label: owners[k].label, who: owners[k].person }));
+
+  return `<div class="owner-line">
+    <strong>담당</strong>
+    ${parts
+      .map(
+        (p, i) =>
+          `${i ? '<span class="dot" aria-hidden="true">·</span>' : ""}<span class="ow">${escapeHtml(
+            p.label
+          )} <b>${escapeHtml(p.who)}</b></span>`
+      )
+      .join("")}
+  </div>`;
+}
+
+/* 개요의 상태 칩(해당 화면으로 이동)과 '모두 본 것으로 표시' */
+els.content.addEventListener("click", (e) => {
+  const go = e.target.closest("[data-go-view]");
+  if (go) {
+    applyView(go.dataset.goView, true);
+    return;
+  }
+  const mark = e.target.closest("[data-since-mark]");
+  if (mark) {
+    writeVisitToday();
+    renderView("overview"); // 띠가 사라진 상태로 다시 그립니다
+  }
+});
 
 /* ---------------- 공지사항 (자동으로 위로 넘어가는 띠) ---------------- */
 
