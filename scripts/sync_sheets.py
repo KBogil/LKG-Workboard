@@ -7,9 +7,16 @@
     - dynamic_month가 true이면: "OO년 O월" 형식의 "이번 달" 탭을 자동으로 찾아 읽습니다.
 - 탕비실은 전용 처리(build_tangbisil_data)를 탑니다. A~F열은 고정 의미로 읽고,
   G열 이후의 "일자별 블록"은 위치를 하드코딩하지 않고 헤더에서 자동으로 찾아냅니다.
+- 공지 시트와 같은 스프레드시트에 "담당자" 탭이 있으면 그것도 함께 읽습니다.
+  (개요 화면의 직무별 담당자 이름을 코드에 박아두지 않기 위한 것입니다)
 - 결과는 WORKBOARD_PIN(비밀번호)으로 암호화되어 data/workboard.json에 저장됩니다.
 - 이 파일은 저장소에 커밋하지 않고, 워크플로가 GitHub Pages로 바로 배포합니다.
   (암호화된 데이터는 압축이 안 돼서, 커밋으로 쌓으면 저장소가 기가 단위로 불어납니다)
+
+소스 목록(스프레드시트 ID)은 두 곳에서 읽습니다.
+  ① 시크릿 WORKBOARD_SOURCES 에 config/sources.json 내용을 그대로 넣어두면 그것을 씁니다.
+  ② 시크릿이 없으면 예전처럼 config/sources.json 파일을 읽습니다.
+저장소가 공개라서 스프레드시트 ID가 그대로 노출되는 것을 피하려고 ①을 먼저 봅니다.
 """
 
 import os
@@ -26,6 +33,14 @@ SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
 PBKDF2_ITERATIONS = 600000
 AES_KEY_LEN = 32  # AES-256
 OUTPUT_PATH = "data/workboard.json"
+
+# 소스 목록을 어디서 읽을지. 시크릿(환경변수)이 있으면 그것을 먼저 씁니다.
+CONFIG_PATH = "config/sources.json"
+SOURCES_ENV = "WORKBOARD_SOURCES"
+
+# 개요 화면의 직무별 담당자를 적어두는 탭 이름. 공지 시트와 같은 스프레드시트에서 찾습니다.
+# 탭이 없으면 담당자 정보 없이 넘어가고, 화면은 예전에 쓰던 이름을 그대로 보여줍니다.
+OWNER_TAB_NAMES = ("담당자", "담당자표", "직무담당자", "업무담당자")
 
 # 탕비실 시트에서 고정으로 쓰는 부분 (스크린샷 기준)
 TANGBISIL_HEADER_ROW = 4      # 4행: 상품명 / 박스당개입수 / 사용량 / 입고량 / (현)잔여재고 / 전월재고
@@ -244,6 +259,26 @@ def to_number(value):
 def is_checked(value):
     """체크박스 셀이 체크되어 있는지."""
     return str(value).strip().upper() in ("TRUE", "1", "Y", "예", "✔", "✓")
+
+
+def norm_key(name):
+    """열 이름 비교용으로 단순화합니다 (기호·공백·줄바꿈 무시).
+    시트 헤더에 이모지나 줄바꿈이 섞여 있어도 같은 열로 보게 하려는 것입니다."""
+    return re.sub(r"[^0-9A-Za-z가-힣]", "", str(name)).lower()
+
+
+def first_value(record, *names):
+    """열 이름이 조금 달라도 찾아서 값을 꺼냅니다.
+    예: "구분", "카테고리", "직무" 중 먼저 찾은 열의 값."""
+    keys = list(record.keys())
+    for want in names:
+        target = norm_key(want)
+        if not target:
+            continue
+        for k in keys:
+            if target in norm_key(k):
+                return clean_cell(record[k])
+    return ""
 
 
 def korean_holidays(year):
@@ -650,11 +685,101 @@ def build_board(rows):
     }
 
 
+# ------------------------------------------------ 직무별 담당자 (담당자 탭)
+
+def find_owner_tab(meta):
+    """'담당자' 탭을 찾습니다. 이름 뒤에 다른 말이 붙어 있어도('담당자 (직무별)') 찾습니다."""
+    for sheet in meta.get("sheets", []):
+        title = sheet["properties"]["title"]
+        flat = re.sub(r"\s+", "", title)
+        if flat in OWNER_TAB_NAMES or flat.startswith("담당자"):
+            return title
+    return None
+
+
+def build_owners(spreadsheet_id, meta, access_token):
+    """개요 화면의 직무별 담당자를 시트에서 읽습니다.
+
+    예전에는 담당자 이름이 app.js에 박혀 있어서, 인사 이동이 있으면 코드를 고쳐야
+    했습니다. 공지 시트와 같은 스프레드시트에 '담당자' 탭을 하나 두고 거기서 읽으면
+    이후로는 시트만 고치면 됩니다.
+
+    탭 형태 (열 이름은 조금 달라도 찾습니다):
+        구분    | 담당자         | 비고
+        전산    | 이재환(Jetty)  |
+        탕비실  | 박동국(Kaju)   |
+
+    탭이 없거나 비어 있으면 빈 목록을 돌려줍니다. 그때 화면은 예전에 쓰던 이름을
+    그대로 보여주므로, 탭을 만들기 전에도 개요가 비지 않습니다.
+    """
+    title = find_owner_tab(meta)
+    if not title:
+        print("[담당자] '담당자' 탭이 없어 건너뜁니다. "
+              "(만들면 개요의 담당자 이름을 시트에서 읽습니다)")
+        return []
+
+    rows = get_values(spreadsheet_id, title, access_token, cell_range="A:F")
+    owners = []
+    for record in rows_to_records(rows):
+        category = first_value(record, "구분", "카테고리", "직무", "업무", "분류")
+        person = first_value(record, "담당자", "이름", "성명")
+        # 구분과 담당자가 둘 다 있어야 카드를 만들 수 있습니다.
+        if not category or not person:
+            continue
+        owners.append({
+            "구분": category,
+            "담당자": person,
+            "비고": first_value(record, "비고", "메모", "설명"),
+        })
+
+    print(f"[담당자] 탭 '{title}': {len(owners)}건 "
+          f"({', '.join(o['구분'] for o in owners) or '읽은 행 없음'})")
+    return owners
+
+
 # ---------------------------------------------------------------- 메인
 
+def load_config():
+    """어떤 스프레드시트의 어떤 탭을 읽을지 적어둔 소스 목록을 가져옵니다.
+
+    저장소가 공개라서, 스프레드시트 ID를 파일로 두면 누구나 볼 수 있습니다.
+    그래서 시크릿 WORKBOARD_SOURCES(config/sources.json 내용을 그대로 붙여넣은 JSON)를
+    먼저 보고, 없으면 예전처럼 파일을 읽습니다. 파일 쪽은 로컬에서 시험 삼아 돌릴 때를
+    위해 남겨둡니다.
+    """
+    raw = os.environ.get(SOURCES_ENV, "").strip()
+    if raw:
+        try:
+            config = json.loads(raw)
+        except json.JSONDecodeError as err:
+            # 여기서 멈추지 않으면 '소스 0개'로 조용히 빈 데이터를 배포하게 됩니다.
+            raise SystemExit(
+                f"[중단] 시크릿 {SOURCES_ENV} 가 올바른 JSON이 아닙니다: {err}\n"
+                f"        config/sources.json 내용을 통째로(중괄호까지) 넣었는지 확인하세요."
+            )
+        print(f"[설정] 소스 목록을 시크릿 {SOURCES_ENV} 에서 읽었습니다.")
+    else:
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                config = json.load(f)
+        except FileNotFoundError:
+            raise SystemExit(
+                f"[중단] 시크릿 {SOURCES_ENV} 도 없고 {CONFIG_PATH} 파일도 없습니다.\n"
+                f"        저장소 Settings > Secrets and variables > Actions 에서\n"
+                f"        {SOURCES_ENV} 를 등록해주세요."
+            )
+        print(f"[설정] 소스 목록을 {CONFIG_PATH} 파일에서 읽었습니다. "
+              f"(시크릿 {SOURCES_ENV} 를 등록하면 그쪽을 먼저 씁니다)")
+
+    sources = config.get("sources")
+    if not isinstance(sources, dict) or not sources:
+        raise SystemExit("[중단] 소스 목록에 'sources' 항목이 없습니다.")
+    print(f"[설정] 읽을 소스 {len(sources)}개: {', '.join(sources)}")
+    return config
+
+
 def main():
-    with open("config/sources.json", encoding="utf-8") as f:
-        config = json.load(f)
+    config = load_config()
 
     access_token = get_access_token()
     meta_cache = {}
@@ -730,6 +855,15 @@ def load_source(key, source, access_token, meta_cache, data):
             board = {"notice": [], "schedule": []}
         data["notice"] = board["notice"]
         data["schedule"] = board["schedule"]
+        # 담당자 탭은 같은 스프레드시트에 있습니다. 소스를 따로 등록하지 않아도 되게
+        # 여기서 함께 읽습니다. 실패해도 공지·스케줄은 그대로 갱신되도록 가둬둡니다.
+        try:
+            data["owners"] = build_owners(spreadsheet_id, meta, access_token)
+        except Exception:
+            import traceback
+            print("[오류] 담당자 탭을 읽는 중 문제가 발생했습니다.")
+            traceback.print_exc()
+            data["owners"] = []
         # 열 이름을 로그에 남겨둡니다. 화면에 값이 안 뜨면 여기부터 확인하세요.
         n_cols = list(board["notice"][0].keys()) if board["notice"] else []
         s_cols = list(board["schedule"][0].keys()) if board["schedule"] else []
