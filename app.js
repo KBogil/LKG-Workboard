@@ -462,6 +462,13 @@ function escapeHtml(v) {
 let TABLE_REGISTRY = {};
 let TABLE_SEQ = 0;
 
+/* 한 번에 그릴 행 수. 업무현황 로그·자산 지급대장처럼 수천 건인 표를 전부
+   한 번에 그리면 화면을 열 때 눈에 보이게 멈칫합니다. 처음에는 이만큼만 그리고
+   '더 보기'로 이어서 붙입니다.
+   정렬·검색은 늘 '전체'를 기준으로 하고 보여주는 개수만 자릅니다.
+   (반대로 하면 정렬했는데 맨 위에 와야 할 행이 없는 표가 됩니다) */
+const TABLE_PAGE = 200;
+
 function isNumericColumn(name) {
   return /수량|건수|개수|사용량|입고량|재고|금액|개입/.test(name);
 }
@@ -542,7 +549,7 @@ function applyTableSort(state) {
 }
 
 function tableHtml(state) {
-  const { id, records, cols, options, clickable } = state;
+  const { id, cols, options, clickable } = state;
 
   const thead =
     "<tr>" +
@@ -562,7 +569,33 @@ function tableHtml(state) {
       .join("") +
     "</tr>";
 
-  const body = state.order
+  const body = rowsHtml(state, visibleOrder(state));
+
+  const sortedNote =
+    state.sortCol === null
+      ? ""
+      : ` 지금은 <strong>${escapeHtml(cols[state.sortCol])}</strong> ${
+          state.sortDir > 0 ? "오름차순" : "내림차순"
+        }입니다 (한 번 더 누르면 반대, 세 번째에 원래 순서).`;
+  const hint = `<div class="table-hint">${
+    clickable ? "행을 누르면 전체 내용을 볼 수 있습니다. " : ""
+  }열 머리글을 누르면 그 열 기준으로 정렬됩니다.${sortedNote}</div>`;
+
+  const centerClass = options.center ? " center-all" : "";
+  return `<div class="table-block" id="${id}">${hint}<div class="table-scroll"><table class="data-table${centerClass}"><thead>${thead}</thead><tbody>${body}</tbody></table></div>${tableMoreHtml(state)}</div>`;
+}
+
+/* 지금 화면에 그릴 행 번호들. limit이 0이면 전체를 그립니다. */
+function visibleOrder(state) {
+  if (!state.limit || state.shown >= state.order.length) return state.order;
+  return state.order.slice(0, state.shown);
+}
+
+/* 행(<tr>)만 만듭니다. '더 보기'가 이 함수로 다음 묶음만 덧붙입니다.
+   (표 전체를 다시 그리면 스크롤 위치가 튀고, 긴 표에서는 멈칫합니다) */
+function rowsHtml(state, order) {
+  const { id, records, cols, options, clickable } = state;
+  return order
     .map((rowIdx) => {
       const r = records[rowIdx];
       const cells = cols
@@ -587,19 +620,29 @@ function tableHtml(state) {
       return `<tr${attrs}>${cells}</tr>`;
     })
     .join("");
+}
 
-  const sortedNote =
-    state.sortCol === null
-      ? ""
-      : ` 지금은 <strong>${escapeHtml(cols[state.sortCol])}</strong> ${
-          state.sortDir > 0 ? "오름차순" : "내림차순"
-        }입니다 (한 번 더 누르면 반대, 세 번째에 원래 순서).`;
-  const hint = `<div class="table-hint">${
-    clickable ? "행을 누르면 전체 내용을 볼 수 있습니다. " : ""
-  }열 머리글을 누르면 그 열 기준으로 정렬됩니다.${sortedNote}</div>`;
+/* 표 아래의 '더 보기' 줄.
+   숫자를 글자로 같이 적어둡니다. 버튼만 있으면 "얼마가 남았는지"를 모르고,
+   표가 잘려 있다는 사실 자체를 놓치기 쉽습니다. */
+function tableMoreHtml(state) {
+  const total = state.order.length;
+  if (!state.limit || total <= state.limit) return ""; // 짧은 표에는 아무것도 안 붙입니다
 
-  const centerClass = options.center ? " center-all" : "";
-  return `<div class="table-block" id="${id}">${hint}<div class="table-scroll"><table class="data-table${centerClass}"><thead>${thead}</thead><tbody>${body}</tbody></table></div></div>`;
+  if (state.shown >= total) {
+    return `<div class="table-more">
+      <span class="table-more-pos">전체 ${total.toLocaleString()}건을 모두 표시했습니다.</span>
+    </div>`;
+  }
+
+  const left = total - state.shown;
+  const next = Math.min(state.limit, left);
+  return `<div class="table-more">
+    <button class="table-more-btn" data-more-table="${state.id}">
+      ${next.toLocaleString()}건 더 보기
+    </button>
+    <span class="table-more-pos">전체 ${total.toLocaleString()}건 중 ${state.shown.toLocaleString()}건 표시 · 남은 ${left.toLocaleString()}건</span>
+  </div>`;
 }
 
 function renderTable(records, columns, opts) {
@@ -635,6 +678,9 @@ function renderTable(records, columns, opts) {
 
   // 정렬을 다시 그릴 때 필요한 것들을 한 덩어리로 보관합니다.
   // (정렬은 화면 전체를 다시 그리지 않고 이 표만 다시 그립니다)
+  // limit: 한 번에 그릴 행 수 (options.limit: 0 을 주면 전체를 한 번에 그립니다)
+  // shown: 지금까지 그린 행 수 ('더 보기'를 누르면 limit만큼 늘어납니다)
+  const limit = options.limit === undefined ? TABLE_PAGE : options.limit;
   const state = {
     id: "tbl" + ++TABLE_SEQ,
     records,
@@ -645,6 +691,8 @@ function renderTable(records, columns, opts) {
     sortCol: null,
     sortDir: 1,
     order: records.map((_, i) => i),
+    limit,
+    shown: limit ? Math.min(limit, records.length) : records.length,
   };
   TABLE_REGISTRY[state.id] = state;
   return tableHtml(state);
@@ -673,7 +721,35 @@ document.addEventListener("click", (e) => {
 
   applyTableSort(state);
   const box = document.getElementById(state.id);
+  // 정렬은 전체를 기준으로 다시 하고, 보여주는 개수(shown)는 그대로 둡니다.
   if (box) box.outerHTML = tableHtml(state);
+});
+
+/* '더 보기'를 눌렀을 때: 이미 그려진 행은 그대로 두고 다음 묶음만 덧붙입니다.
+   표 전체를 다시 그리면 보고 있던 자리에서 화면이 튀기 때문입니다.
+   본문과 팝업에 모두 표가 있어서 document에서 한 번에 받습니다. */
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-more-table]");
+  if (!btn) return;
+  const state = TABLE_REGISTRY[btn.dataset.moreTable];
+  if (!state) return;
+
+  const box = document.getElementById(state.id);
+  const tbody = box ? box.querySelector("tbody") : null;
+  if (!tbody) return;
+
+  const next = state.order.slice(state.shown, state.shown + state.limit);
+  tbody.insertAdjacentHTML("beforeend", rowsHtml(state, next));
+  state.shown += next.length;
+
+  // 안내 줄만 새로 그립니다 (남은 건수 갱신 · 다 보여줬으면 버튼이 사라집니다)
+  const foot = box.querySelector(".table-more");
+  if (foot) {
+    foot.outerHTML = tableMoreHtml(state);
+    // 버튼을 다시 만들었으므로 키보드 초점을 새 버튼으로 옮겨줍니다.
+    const again = box.querySelector("[data-more-table]");
+    if (again) again.focus();
+  }
 });
 
 /* 표의 행을 눌렀을 때 팝업을 띄웁니다 (화면을 새로 그려도 계속 동작하도록 위임 처리). */
@@ -718,16 +794,50 @@ function rankCard(name, count, max, sub) {
   </div>`;
 }
 
-/* 카테고리 이름을 세미 타이틀로 얹은 담당자 카드 */
-function ownerCard(category, owner, countLabel) {
+/* 카테고리 이름을 세미 타이틀로 얹은 담당자 카드.
+   sub를 넘기면 '담당' 대신 그 글자를 씁니다 (담당자 탭의 비고를 보여줄 때 사용). */
+function ownerCard(category, owner, countLabel, sub) {
   return `<div class="owner-block">
     <h3 class="owner-category">${escapeHtml(category)}</h3>
     <div class="rank-card">
       <div class="rank-name">${escapeHtml(owner)}</div>
-      <div class="rank-sub">담당</div>
+      <div class="rank-sub">${escapeHtml(sub || "담당")}</div>
       <div class="rank-count">${escapeHtml(countLabel)}</div>
     </div>
   </div>`;
+}
+
+/* ---------------- 직무별 담당자 ---------------- */
+
+/* 담당자 이름을 코드에 박아두면 인사 이동 때마다 코드를 고쳐야 해서,
+   시트의 '담당자' 탭에서 읽어옵니다. 탭이 없거나 그 구분이 비어 있을 때만
+   아래 기본값을 씁니다 (탭을 만들기 전에도 개요가 비지 않게 하려는 것입니다). */
+const OWNER_FALLBACK = {
+  전산: "이재환(Jetty)",
+  탕비실: "박동국(Kaju)",
+  소모품: "박동국(Kaju)",
+  법인차량: "박동국(Kaju)",
+  메일룸: "박동국(Kaju)",
+};
+
+/* 개요에서 건수를 세는 방법이 정해져 있는 구분들. 이 순서대로 카드를 그립니다. */
+const OWNER_CATEGORIES = ["전산", "탕비실", "소모품", "법인차량", "메일룸"];
+
+/* 시트에서 읽은 담당자를 '구분(기호 무시) -> {label, person, note}'로 정리합니다.
+   "법인 차량"처럼 띄어쓰기가 달라도 같은 구분으로 봅니다. */
+function ownerMap() {
+  const map = {};
+  getRecords("owners").forEach((o) => {
+    const label = String(o["구분"] || "").trim();
+    const person = String(o["담당자"] || "").trim();
+    if (!label || !person) return;
+    map[normalizeColumn(label)] = { label, person, note: String(o["비고"] || "").trim() };
+  });
+  return map;
+}
+
+function ownerOf(map, category) {
+  return map[normalizeColumn(category)] || null;
 }
 
 /* ---------------- 화면별 렌더링 ---------------- */
@@ -795,6 +905,42 @@ function renderOverview() {
   const mailCount =
     postCount === null && printCount === null ? null : (postCount || 0) + (printCount || 0);
 
+  // 구분별 건수 표시. 탕비실만 '진행일수 / 근무일수' 형태입니다.
+  const counts = {
+    전산: countLabel(jeonsanCount),
+    탕비실: tangbisil.workdays_total
+      ? `${tangbisil.workdays_done} / ${tangbisil.workdays_total}일`
+      : "-",
+    소모품: countLabel(somopumCount),
+    법인차량: countLabel(vehicleCount),
+    메일룸: countLabel(mailCount),
+  };
+
+  // 담당자는 시트에서 읽고, 그 구분이 시트에 없으면 기본값을 씁니다.
+  const owners = ownerMap();
+  const cards = OWNER_CATEGORIES.map((category) => {
+    const found = ownerOf(owners, category);
+    return ownerCard(
+      category,
+      found ? found.person : OWNER_FALLBACK[category] || "-",
+      counts[category],
+      found && found.note ? found.note : ""
+    );
+  });
+
+  // 시트에만 있는 구분(예: 플랜트박스)도 카드로 보여줍니다.
+  // 건수를 세는 방법은 구분마다 달라서, 아직 정해지지 않은 구분은 '-'로 둡니다.
+  Object.keys(owners)
+    .filter((k) => !OWNER_CATEGORIES.some((c) => normalizeColumn(c) === k))
+    .forEach((k) => {
+      const o = owners[k];
+      cards.push(ownerCard(o.label, o.person, "-", o.note || ""));
+    });
+
+  const ownerNote = Object.keys(owners).length
+    ? "담당자 이름은 시트의 '담당자' 탭에서 읽어옵니다."
+    : "";
+
   return `
     <div class="banner-row">
       <div class="banner-card">
@@ -810,17 +956,11 @@ function renderOverview() {
     ${noticeBar()}
 
     <h2 class="section-title">직무별 업무 처리 현황</h2>
-    <p class="section-note">${monthLabel} 한 달 동안 처리된 건수입니다.</p>
+    <p class="section-note">${monthLabel} 한 달 동안 처리된 건수입니다.${
+      ownerNote ? " " + ownerNote : ""
+    }</p>
     <div class="owner-grid">
-      ${ownerCard("전산", "이재환(Jetty)", countLabel(jeonsanCount))}
-      ${ownerCard(
-        "탕비실",
-        "박동국(Kaju)",
-        tangbisil.workdays_total ? `${tangbisil.workdays_done} / ${tangbisil.workdays_total}일` : "-"
-      )}
-      ${ownerCard("소모품", "박동국(Kaju)", countLabel(somopumCount))}
-      ${ownerCard("법인차량", "박동국(Kaju)", countLabel(vehicleCount))}
-      ${ownerCard("메일룸", "박동국(Kaju)", countLabel(mailCount))}
+      ${cards.join("")}
     </div>
 
     ${schedulePanel()}
@@ -1517,6 +1657,22 @@ function renderAdmin() {
               }</td>
               <td class="muted">-</td>
             </tr>
+            <!-- 담당자 탭은 없어도 기본값으로 도니까 '문제'로 세지 않습니다.
+                 대신 지금 어디서 읽고 있는지만 여기서 확인할 수 있게 둡니다. -->
+            <tr>
+              <td class="cell-strong">직무별 담당자 (담당자 탭)</td>
+              <td>${getRecords("owners").length}명</td>
+              <td>${
+                getRecords("owners").length
+                  ? `<span class="badge done">시트에서 읽음</span>`
+                  : `<span class="badge plain">기본값 사용</span>`
+              }</td>
+              <td class="muted">${
+                getRecords("owners").length
+                  ? escapeHtml(getRecords("owners").map((o) => o["구분"]).join(", "))
+                  : "담당자 탭을 만들면 시트에서 읽습니다"
+              }</td>
+            </tr>
           </tbody>
         </table></div>
       </div>
@@ -1730,13 +1886,16 @@ els.content.addEventListener("click", (e) => {
 
 /* ---------------- 크루별 조회 ---------------- */
 
-/* 각 대장에서 '사람 이름'이 들어있는 열. 시트 서식 기준입니다.
-   이 열들만 보고 찾기 때문에, 비고란에 우연히 이름이 섞여도 딸려오지 않습니다. */
+/* 각 대장에서 찾아볼 열입니다. 시트 서식 기준.
+   - nameFields: 사람 이름이 들어있는 열
+   - codeFields: 자산번호처럼 물건을 가리키는 번호가 들어있는 열
+   이 열들만 보기 때문에, 비고란에 우연히 이름이 섞여도 딸려오지 않습니다. */
 const CREW_SOURCES = [
   {
     key: "jeonsan_status",
     label: "전산 업무현황",
     nameFields: ["요청자", "담당자"],
+    codeFields: ["자산번호", "관리번호", "시리얼"],
     columns: ["유형","요청자","부서","자산번호","업무내용","조치사항","담당자",
               "요청일자","착수일자","완료일자","진행상태","비고"],
     detailTitle: "전산 업무 상세",
@@ -1745,6 +1904,7 @@ const CREW_SOURCES = [
     key: "jeonsan_asset",
     label: "자산 지급대장",
     nameFields: ["한글이름", "영어이름"],
+    codeFields: ["자산번호", "관리번호", "시리얼"],
     columns: null, // 열이 많아 시트에 있는 그대로 보여줍니다
     detailTitle: "자산 지급 상세",
   },
@@ -1752,16 +1912,45 @@ const CREW_SOURCES = [
     key: "jeonsan_io",
     label: "입출고 · 대여",
     nameFields: ["이름", "영문명"],
+    codeFields: ["자산번호", "관리번호", "시리얼"],
     columns: null,
     detailTitle: "입출고 상세",
   },
 ];
 
-/* 지정한 이름 열에서 찾습니다. 그 열이 시트에 없으면 모든 값에서 찾습니다(안전장치). */
-function matchesCrew(record, needle, nameFields) {
-  const fields = nameFields.filter((f) => f in record);
-  const values = fields.length ? fields.map((f) => record[f]) : Object.values(record);
-  return values.some((v) => String(v ?? "").toLowerCase().includes(needle));
+/* 찾을 열들을 실제 시트 열 이름에 느슨하게 맞춥니다.
+   시트 헤더가 "자산번호(태그)"처럼 적혀 있어도 같은 열로 봅니다. */
+function searchFields(record, wants) {
+  const keys = Object.keys(record);
+  const hits = [];
+  wants.forEach((want) => {
+    const target = normalizeColumn(want);
+    if (!target) return;
+    keys.forEach((k) => {
+      if (normalizeColumn(k).includes(target) && !hits.includes(k)) hits.push(k);
+    });
+  });
+  return hits;
+}
+
+/* 기호를 뺀 형태. 자산번호를 "LKG-NB-021"로 적었는지 "lkg nb 021"로 적었는지
+   사람마다 달라서, 둘 다 찾히도록 붙임 형태로도 비교합니다. */
+function flatCode(value) {
+  return String(value ?? "").toLowerCase().replace(/[\s\-_/.()]/g, "");
+}
+
+/* 이름 열 · 자산번호 열에서 찾습니다.
+   그 열들을 하나도 못 찾았을 때만 모든 값에서 찾습니다 (안전장치). */
+function matchesCrew(record, needle, source) {
+  const wants = (source.nameFields || []).concat(source.codeFields || []);
+  const keys = searchFields(record, wants);
+  const values = keys.length ? keys.map((k) => record[k]) : Object.values(record);
+  const flatNeedle = flatCode(needle);
+  return values.some((v) => {
+    const text = String(v ?? "").toLowerCase();
+    if (text.includes(needle)) return true;
+    return flatNeedle.length >= 2 && flatCode(text).includes(flatNeedle);
+  });
 }
 
 let CREW_QUERY = "";
@@ -1773,7 +1962,7 @@ function crewMatches(query) {
   if (!needle) return [];
   return CREW_SOURCES.map((source) => ({
     ...source,
-    rows: getRecords(source.key).filter((r) => matchesCrew(r, needle, source.nameFields)),
+    rows: getRecords(source.key).filter((r) => matchesCrew(r, needle, source)),
   }));
 }
 
@@ -1830,7 +2019,7 @@ function refreshCrewModal() {
   const modal = document.querySelector(".modal");
   const wide = CREW_TAB !== null && CREW_ROW === null;
   if (modal) modal.classList.toggle("modal-wide", wide);
-  openModal(`${query} · 크루 조회`, crewModalBody());
+  openModal(`${query} · 조회 결과`, crewModalBody());
   // 행 상세를 보고 있을 때만 이전/다음을 켭니다 (openModal이 지운 뒤에 다시 켭니다)
   if (CREW_TAB !== null && CREW_ROW !== null) MODAL_NAV = { mode: "crew" };
 }
@@ -1839,13 +2028,15 @@ function openCrewModal() {
   const query = CREW_QUERY.trim();
   const box = document.getElementById("crewResult");
   if (!query) {
-    if (box) box.innerHTML = `<div class="empty-note">조회할 크루 이름을 입력해주세요.</div>`;
+    if (box) {
+      box.innerHTML = `<div class="empty-note">조회할 이름이나 자산번호를 입력해주세요.</div>`;
+    }
     return;
   }
   const found = crewMatches(query).filter((g) => g.rows.length);
   if (!found.length) {
     if (box) {
-      box.innerHTML = `<div class="empty-note">'${escapeHtml(query)}' 와(과) 일치하는 기록이 없습니다. 한글 이름이나 영문 닉네임으로 찾아보세요.</div>`;
+      box.innerHTML = `<div class="empty-note">'${escapeHtml(query)}' 와(과) 일치하는 기록이 없습니다. 한글 이름 · 영문 닉네임 · 자산번호로 찾아보세요.</div>`;
     }
     return;
   }
@@ -1943,11 +2134,13 @@ function renderJeonsan() {
     </div>
 
     <div class="crew-panel">
-      <h2 class="section-title">크루별 조회</h2>
-      <p class="section-note">아래 세 표는 그대로 두고, 별도 창에서 크루별 기록만 따로 찾아봅니다.</p>
+      <h2 class="section-title">크루 · 자산번호 조회</h2>
+      <p class="section-note">아래 세 표는 그대로 두고, 별도 창에서 해당 기록만 따로 찾아봅니다.
+        자산번호로 찾으면 그 자산이 오간 기록(업무 · 지급 · 입출고)을 함께 볼 수 있습니다.
+        기호는 무시하므로 <strong>LKG-NB-021</strong> 과 <strong>lkgnb021</strong> 이 같게 찾힙니다.</p>
 
       <div class="search-bar">
-        <input type="search" id="crewSearch" placeholder="한글 이름 또는 영문 닉네임 (예: 곽보길 / Charles)" autocomplete="off" />
+        <input type="search" id="crewSearch" placeholder="이름 · 닉네임 · 자산번호 (예: 곽보길 / Charles / LKG-NB-021)" autocomplete="off" />
         <button class="crew-search-btn" id="crewSearchBtn">조회</button>
       </div>
 
