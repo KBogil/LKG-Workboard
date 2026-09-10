@@ -522,6 +522,21 @@ function escapeHtml(v) {
 let TABLE_REGISTRY = {};
 let TABLE_SEQ = 0;
 
+/* 표마다 붙는 검색칸을 몇 건부터 보여줄지.
+   다섯 줄짜리 표에 검색칸이 붙으면 도움이 아니라 방해입니다.
+   options.search 에 true/false 를 주면 이 기준과 무관하게 강제할 수 있습니다. */
+const TABLE_SEARCH_MIN = 15;
+
+/* 자동 갱신으로 화면을 다시 그리는 동안, 보던 표 상태를 잠깐 들고 있는 곳.
+   renderTable 이 같은 '열쇠'의 표를 만나면 정렬 · 검색어 · 표시 개수를 이어받습니다.
+   id(tbl1, tbl2 ...)는 그릴 때마다 새로 붙으므로 열쇠로 쓸 수 없습니다. */
+let TABLE_KEEP = null;
+
+/* 자동 갱신으로 '같은 화면'을 다시 그리는 중인지.
+   화면을 옮길 때 검색 상태를 지우는 건 맞지만, 5분마다 도는 자동 갱신에서까지
+   지워버리면 쓰던 사람에게는 버그로 보입니다. */
+let KEEP_VIEW_STATE = false;
+
 /* 한 번에 그릴 행 수. 업무현황 로그·자산 지급대장처럼 수천 건인 표를 전부
    한 번에 그리면 화면을 열 때 눈에 보이게 멈칫합니다. 처음에는 이만큼만 그리고
    '더 보기'로 이어서 붙입니다.
@@ -588,24 +603,62 @@ function compareKeys(a, b) {
   return a.text.localeCompare(b.text, "ko");
 }
 
-/* 표를 실제로 다시 그리지 않고, '그릴 순서'만 새로 만듭니다.
-   행 번호(data-row)는 원래 자료의 번호를 그대로 쓰기 때문에,
-   정렬을 바꿔도 행을 눌렀을 때 열리는 상세 내용이 어긋나지 않습니다. */
-function applyTableSort(state) {
-  const base = state.records.map((_, i) => i);
-  const col = state.sortCol === null ? null : state.cols[state.sortCol];
-  if (!col) {
-    state.order = base;
-    return;
+/* 검색어가 이 행의 어느 칸에든 들어 있는지.
+   보이는 열만 봅니다. 화면에 없는 열까지 뒤지면 "왜 이게 걸렸지"가 됩니다.
+   기호를 뺀 형태로도 비교해서 LKG-NB-021 을 lkgnb021 로도 찾습니다
+   (전산 크루 조회에서 쓰는 flatCode 와 같은 규칙).
+   붙임 비교는 두 글자 이상일 때만 합니다 — 한 글자면 거의 모든 행이 걸립니다. */
+function tableMatches(state, rowIdx, needle, flat) {
+  const r = state.records[rowIdx];
+  for (const c of state.cols) {
+    const v = r[c];
+    if (v === undefined || v === null || v === "") continue;
+    const text = String(v);
+    if (text.toLowerCase().includes(needle)) return true;
+    if (flat && flatCode(text).includes(flat)) return true;
   }
-  const keys = state.records.map((r) => sortKey(r[col]));
-  state.order = base.sort((x, y) => {
-    const kx = keys[x];
-    const ky = keys[y];
-    if (kx.empty || ky.empty) return compareKeys(kx, ky) || x - y;
-    const d = compareKeys(kx, ky);
-    return d !== 0 ? d * state.sortDir : x - y; // 값이 같으면 원래 순서 유지
-  });
+  return false;
+}
+
+/* 표를 실제로 다시 그리지 않고, '그릴 순서'만 새로 만듭니다.
+   순서는 늘 검색 → 정렬 차례로 만듭니다.
+
+   행 번호(data-row)는 원래 자료의 번호를 그대로 쓰기 때문에,
+   검색하거나 정렬을 바꿔도 행을 눌렀을 때 열리는 상세 내용이 어긋나지 않습니다. */
+function applyTableOrder(state) {
+  const needle = String(state.query || "").trim().toLowerCase();
+  const flat = needle.length >= 2 ? flatCode(needle) : "";
+
+  let base = state.records.map((_, i) => i);
+  if (needle) base = base.filter((i) => tableMatches(state, i, needle, flat));
+
+  const col = state.sortCol === null ? null : state.cols[state.sortCol];
+  if (col) {
+    const keys = state.records.map((r) => sortKey(r[col]));
+    base.sort((x, y) => {
+      const kx = keys[x];
+      const ky = keys[y];
+      if (kx.empty || ky.empty) return compareKeys(kx, ky) || x - y;
+      const d = compareKeys(kx, ky);
+      return d !== 0 ? d * state.sortDir : x - y; // 값이 같으면 원래 순서 유지
+    });
+  }
+  state.order = base;
+
+  // 표시 개수를 순서 길이에 맞춰 다시 잡습니다.
+  // want 는 '사용자가 보겠다고 한 개수'입니다 ('더 보기'를 누를 때마다 늘어납니다).
+  // shown 을 직접 깎지 않고 want 를 따로 두는 이유:
+  // 400건까지 펼쳐 둔 상태에서 검색해 20건만 남으면 shown 은 20이 되어야 하는데,
+  // 그때 400을 잊어버리면 검색어를 지웠을 때 200건으로 되돌아가 버립니다.
+  state.want = Math.max(state.limit || 0, state.want || 0);
+  state.shown = state.limit
+    ? Math.min(state.want, state.order.length)
+    : state.order.length;
+}
+
+/* 예전 이름으로 부르는 곳이 있어도 깨지지 않게 남겨 둡니다. */
+function applyTableSort(state) {
+  applyTableOrder(state);
 }
 
 function tableHtml(state) {
@@ -629,7 +682,7 @@ function tableHtml(state) {
       .join("") +
     "</tr>";
 
-  const body = rowsHtml(state, visibleOrder(state));
+  const body = rowsHtml(state, visibleOrder(state)) || tableEmptyRowHtml(state);
 
   const sortedNote =
     state.sortCol === null
@@ -642,7 +695,7 @@ function tableHtml(state) {
   }열 머리글을 누르면 그 열 기준으로 정렬됩니다.${sortedNote}</div>`;
 
   const centerClass = options.center ? " center-all" : "";
-  return `<div class="table-block" id="${id}">${hint}<div class="table-scroll"><table class="data-table${centerClass}"><thead>${thead}</thead><tbody>${body}</tbody></table></div>${tableMoreHtml(state)}</div>`;
+  return `<div class="table-block" id="${id}">${tableToolsHtml(state)}${hint}<div class="table-scroll"><table class="data-table${centerClass}"><thead>${thead}</thead><tbody>${body}</tbody></table></div>${tableMoreHtml(state)}</div>`;
 }
 
 /* 지금 화면에 그릴 행 번호들. limit이 0이면 전체를 그립니다. */
@@ -705,6 +758,114 @@ function tableMoreHtml(state) {
   </div>`;
 }
 
+/* 검색해서 한 건도 없을 때. 표를 통째로 지우지 않고 한 줄로 알립니다.
+   머리글이 남아 있어야 "무엇으로 찾고 있었는지"가 보입니다. */
+function tableEmptyRowHtml(state) {
+  return `<tr class="table-empty-row"><td colspan="${state.cols.length}">
+    찾는 내용이 없습니다. 검색어를 지우면 전체 ${state.records.length.toLocaleString()}건이 다시 나옵니다.
+  </td></tr>`;
+}
+
+/* 표 위의 검색칸과 CSV 단추. */
+function tableToolsHtml(state) {
+  if (!state.searchOn && !state.csvOn) return "";
+
+  const search = state.searchOn
+    ? `<input type="search" class="table-search-input" data-search-table="${state.id}"
+        value="${escapeHtml(state.query || "")}" autocomplete="off"
+        aria-label="이 표 안에서 찾기"
+        placeholder="이 표에서 찾기 (전체 ${state.records.length.toLocaleString()}건)" />
+      <span class="table-found" aria-live="polite">${tableFoundText(state)}</span>`
+    : "";
+
+  const csv = state.csvOn
+    ? `<button class="table-csv-btn" data-csv-table="${state.id}"
+        title="지금 화면의 검색 결과와 정렬 순서 그대로 내려받습니다">CSV 내려받기</button>`
+    : "";
+
+  return `<div class="table-tools">${search}<span class="table-tools-gap"></span>${csv}</div>`;
+}
+
+function tableFoundText(state) {
+  if (!state.query) return "";
+  return `${state.order.length.toLocaleString()}건 찾음`;
+}
+
+/* 검색 중에는 입력칸을 다시 만들지 않고 본문만 갈아끼웁니다.
+   표 전체를 다시 그리면 글자를 칠 때마다 입력칸이 새로 생겨 초점과 커서가 날아갑니다. */
+function refreshTableBody(state) {
+  const box = document.getElementById(state.id);
+  if (!box) return;
+
+  const tbody = box.querySelector("tbody");
+  if (tbody) tbody.innerHTML = rowsHtml(state, visibleOrder(state)) || tableEmptyRowHtml(state);
+
+  const found = box.querySelector(".table-found");
+  if (found) found.textContent = tableFoundText(state);
+
+  // '더 보기' 줄은 검색 결과에 따라 생겼다 없어졌다 합니다.
+  const foot = box.querySelector(".table-more");
+  const footHtml = tableMoreHtml(state);
+  if (foot) foot.outerHTML = footHtml;
+  else if (footHtml) box.insertAdjacentHTML("beforeend", footHtml);
+}
+
+/* ---------------- CSV 내려받기 ----------------
+
+   - 화면의 검색 · 정렬은 그대로 반영하고, '200건씩 보기' 제한은 무시하고 전부 씁니다.
+     화면 제한은 보기 편하려고 자른 것이지 자료가 아닙니다. 그대로 잘라 내보내면
+     "받아보니 200건뿐"이라는 함정이 됩니다.
+   - 맨 앞에 BOM(﻿)을 붙입니다. 없으면 엑셀에서 한글이 깨집니다.
+   - 첫 줄에 '대외 공유 금지'를 적습니다. 화면의 자료는 암호화되어 있지만
+     CSV 는 평문 파일이라 성격이 다릅니다. (엑셀에서는 1행에 들어가니 지우고 쓰시면 됩니다) */
+function csvCell(v) {
+  const text = String(v === undefined || v === null ? "" : v);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function csvStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function tableCsvText(state) {
+  const head =
+    `# 대외 공유 금지 · LKG Workboard · ${csvStamp()} 기준 · ${state.order.length}건` +
+    (state.query ? ` · 검색어: ${state.query}` : "");
+
+  const lines = [csvCell(head), state.cols.map(csvCell).join(",")];
+  state.order.forEach((rowIdx) => {
+    const r = state.records[rowIdx];
+    lines.push(state.cols.map((c) => csvCell(r[c])).join(","));
+  });
+  // 윈도우 엑셀에서 줄바꿈이 어긋나지 않도록 CRLF 로 잇습니다.
+  return "﻿" + lines.join("\r\n");
+}
+
+function downloadTableCsv(state) {
+  // 파일 이름에 쓸 수 없는 글자를 걸러냅니다. 끝의 '상세'는 표 이름으로는 어색해서 뗍니다.
+  const base = String(state.name || "표").replace(/\s*상세\s*$/, "").replace(/[\\/:*?"<>|]/g, "");
+  const name = `워크보드_${base || "표"}_${csvStamp()}.csv`;
+
+  const blob = new Blob([tableCsvText(state)], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // 브라우저가 다 읽을 시간을 준 뒤에 메모리를 놓아줍니다.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* 다시 그려도 같은 표를 알아보기 위한 '열쇠'.
+   화면 + 상세 제목 + 열 이름 묶음으로 만듭니다. 시트 열이 바뀌지 않는 한 그대로입니다. */
+function tableKeyOf(options, cols) {
+  return [CURRENT_VIEW, options.detailTitle || "", cols.join("|")].join("::");
+}
+
 function renderTable(records, columns, opts) {
   const options = opts || {};
   if (!records.length) {
@@ -743,19 +904,55 @@ function renderTable(records, columns, opts) {
   const limit = options.limit === undefined ? TABLE_PAGE : options.limit;
   const state = {
     id: "tbl" + ++TABLE_SEQ,
+    key: tableKeyOf(options, cols),
     records,
     cols,
     options,
     clickable: options.clickable !== false,
     title: options.detailTitle || "상세 내용",
+    name: options.csvName || options.detailTitle || "표",
+    // 검색칸은 긴 표에만. CSV 는 비어 있지 않은 표면 모두.
+    searchOn: options.search === undefined ? records.length >= TABLE_SEARCH_MIN : !!options.search,
+    csvOn: options.csv === undefined ? true : !!options.csv,
+    query: "",
     sortCol: null,
     sortDir: 1,
     order: records.map((_, i) => i),
     limit,
+    want: limit || records.length, // 사용자가 보겠다고 한 개수 ('더 보기'로 늘어납니다)
     shown: limit ? Math.min(limit, records.length) : records.length,
   };
+
+  // 자동 갱신으로 다시 그리는 중이면 보던 상태를 이어받습니다.
+  // sortCol 은 열 번호라서 시트 열이 줄었으면 범위를 벗어날 수 있는데,
+  // 그때는 cols[sortCol] 이 undefined 가 되어 '정렬 없음'으로 자연히 되돌아갑니다.
+  const keep = TABLE_KEEP && TABLE_KEEP[state.key];
+  if (keep) {
+    state.sortCol = keep.sortCol;
+    state.sortDir = keep.sortDir;
+    state.query = keep.query;
+    state.want = keep.want;
+  }
+  applyTableOrder(state);
+
   TABLE_REGISTRY[state.id] = state;
   return tableHtml(state);
+}
+
+/* 지금 화면에 있는 표들의 상태를 열쇠별로 담아 둡니다 (자동 갱신 직전에 부릅니다). */
+function snapshotTables() {
+  const keep = {};
+  Object.keys(TABLE_REGISTRY).forEach((id) => {
+    const st = TABLE_REGISTRY[id];
+    if (!st || !st.key) return;
+    keep[st.key] = {
+      sortCol: st.sortCol,
+      sortDir: st.sortDir,
+      query: st.query,
+      want: st.want,
+    };
+  });
+  return keep;
 }
 
 /* 열 머리글을 눌렀을 때: 오름차순 → 내림차순 → 원래 순서로 돌아갑니다.
@@ -779,7 +976,7 @@ document.addEventListener("click", (e) => {
     state.sortDir = 1;
   }
 
-  applyTableSort(state);
+  applyTableOrder(state);
   const box = document.getElementById(state.id);
   // 정렬은 전체를 기준으로 다시 하고, 보여주는 개수(shown)는 그대로 둡니다.
   if (box) box.outerHTML = tableHtml(state);
@@ -801,6 +998,7 @@ document.addEventListener("click", (e) => {
   const next = state.order.slice(state.shown, state.shown + state.limit);
   tbody.insertAdjacentHTML("beforeend", rowsHtml(state, next));
   state.shown += next.length;
+  state.want = state.shown; // 검색을 지웠을 때 여기까지 다시 펼쳐지도록 기억해 둡니다
 
   // 안내 줄만 새로 그립니다 (남은 건수 갱신 · 다 보여줬으면 버튼이 사라집니다)
   const foot = box.querySelector(".table-more");
@@ -810,6 +1008,28 @@ document.addEventListener("click", (e) => {
     const again = box.querySelector("[data-more-table]");
     if (again) again.focus();
   }
+});
+
+/* 표 위 검색칸에 글자를 칠 때.
+   본문과 팝업 양쪽에 표가 있어서 document 에서 한 번에 받습니다. */
+document.addEventListener("input", (e) => {
+  const input = e.target.closest("[data-search-table]");
+  if (!input) return;
+  const state = TABLE_REGISTRY[input.dataset.searchTable];
+  if (!state) return;
+
+  state.query = input.value;
+  applyTableOrder(state);
+  refreshTableBody(state); // 입력칸은 건드리지 않습니다 (초점 유지)
+});
+
+/* CSV 내려받기 단추. */
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-csv-table]");
+  if (!btn) return;
+  const state = TABLE_REGISTRY[btn.dataset.csvTable];
+  if (!state) return;
+  downloadTableCsv(state);
 });
 
 /* 표의 행을 눌렀을 때 팝업을 띄웁니다 (화면을 새로 그려도 계속 동작하도록 위임 처리). */
@@ -2374,7 +2594,25 @@ function applyUpdate() {
   if (els.refreshPill) els.refreshPill.hidden = true;
   els.lastUpdated.textContent = "마지막 업데이트: " + formatDateTime(WORKBOARD.generated_at);
   refreshAdminBadge();
-  renderView(CURRENT_VIEW);
+
+  // 자동 갱신은 '보고 있던 자리'를 지켜야 합니다.
+  // 예전에는 5분마다 정렬이 풀리고 검색어가 지워지고 화면이 맨 위로 튀었습니다.
+  // 새 자료를 받았다는 이유로 하던 일을 잃는 것이라 버그처럼 느껴지는 지점이었습니다.
+  const scroller = document.querySelector(".main");
+  const top = scroller ? scroller.scrollTop : 0;
+
+  TABLE_KEEP = snapshotTables();
+  KEEP_VIEW_STATE = true;
+  try {
+    renderView(CURRENT_VIEW);
+  } finally {
+    // 다음에 화면을 '옮길' 때는 평소대로 초기화되어야 하므로 반드시 되돌립니다.
+    KEEP_VIEW_STATE = false;
+    TABLE_KEEP = null;
+  }
+
+  // 자료가 늘어 화면이 길어졌을 수 있으니, 있는 만큼만 되돌립니다.
+  if (scroller && top) scroller.scrollTop = Math.min(top, scroller.scrollHeight);
 }
 
 async function checkForUpdate() {
@@ -2722,6 +2960,153 @@ els.modalBody.addEventListener("click", (e) => {
   }
 });
 
+/* ---------------- 반복 이슈 · 교체 검토 후보 ----------------
+
+   같은 자산번호로 업무가 여러 번 올라왔다면, 그 장비는 고치는 것보다 바꾸는 게
+   싼 시점일 수 있습니다. 수백 건을 사람이 훑어서는 보이지 않는 정보이고,
+   AI 도 API 도 규칙 사전도 필요 없는 순수 계산입니다.
+
+   기간(최근 N개월)을 '주 기준'으로 쓰지 않는 이유가 중요합니다.
+   전산 시트는 날짜 입력이 들쭉날쭉해서, 기간으로 먼저 거르면 실제로 반복된 자산이
+   통째로 빠져 버립니다. 그래서 **누적 건수**로 세고, 최근 건수는 참고 열로만 둡니다.
+   날짜를 못 읽은 건은 그 열에서 조용히 빼지 않고 표 아래에 몇 건인지 적습니다. */
+const REPEAT_MIN = 3; // 몇 건부터 '반복'으로 볼지
+const REPEAT_RECENT_DAYS = 90; // 참고로 같이 보여줄 최근 기간
+
+let REPEAT_INDEX = {}; // 열쇠 -> 그 자산의 업무 기록 (행을 눌렀을 때 씁니다)
+
+function repeatDateText(d) {
+  return d ? `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}` : "-";
+}
+
+function repeatRowDate(r) {
+  return parseKDate(pick(r, "요청일자")) || parseKDate(pick(r, "완료일자")) || null;
+}
+
+function repeatAssets(status) {
+  const map = new Map();
+  let noCode = 0;
+
+  status.forEach((r) => {
+    const code = String(pick(r, "자산번호", "관리번호", "시리얼") || "").trim();
+    if (!code) {
+      noCode += 1;
+      return;
+    }
+    // 기호를 뺀 형태를 열쇠로 씁니다. LKG-NB-021 과 lkgnb021 이 한 자산으로 묶입니다.
+    const key = flatCode(code) || code;
+    if (!map.has(key)) map.set(key, { key, code, rows: [] });
+    map.get(key).rows.push(r);
+  });
+
+  const cut = Date.now() - REPEAT_RECENT_DAYS * 86400000;
+  const list = [];
+  let undated = 0;
+
+  map.forEach((v) => {
+    if (v.rows.length < REPEAT_MIN) return;
+    let recent = 0;
+    let dated = 0;
+    let last = null;
+    v.rows.forEach((r) => {
+      const d = repeatRowDate(r);
+      if (!d) {
+        undated += 1;
+        return;
+      }
+      dated += 1;
+      if (d.getTime() >= cut) recent += 1;
+      if (!last || d.getTime() > last.getTime()) last = d;
+    });
+    const types = [...new Set(v.rows.map((r) => String(pick(r, "유형") || "").trim()).filter(Boolean))];
+    list.push({ key: v.key, code: v.code, total: v.rows.length, recent, dated, last, types });
+  });
+
+  // 많이 손 간 순 → 같은 건수면 최근에 손댄 순
+  list.sort((a, b) => b.total - a.total || (b.last ? b.last.getTime() : 0) - (a.last ? a.last.getTime() : 0));
+
+  REPEAT_INDEX = {};
+  map.forEach((v) => {
+    REPEAT_INDEX[v.key] = v.rows;
+  });
+
+  return { list, noCode, undated };
+}
+
+function repeatPanel(rep) {
+  const header = `<div class="panel-header">
+      <h2>반복 이슈 · 교체 검토 후보</h2>
+      <span class="panel-meta">같은 자산번호로 ${REPEAT_MIN}건 이상</span>
+    </div>`;
+
+  if (!rep.list.length) {
+    return `<div class="panel">${header}
+      <div class="panel-body"><div class="empty-note">같은 자산번호로 ${REPEAT_MIN}건 이상 접수된 자산이 없습니다.${
+        rep.noCode ? ` (자산번호가 비어 있어 셀 수 없는 건 ${rep.noCode.toLocaleString()}건)` : ""
+      }</div></div>
+    </div>`;
+  }
+
+  const rows = rep.list
+    .map(
+      (it) => `<tr class="row-clickable" data-repeat="${escapeHtml(it.key)}">
+        <td class="cell-strong">${escapeHtml(it.code)}</td>
+        <td class="num"><strong>${it.total}건</strong></td>
+        <td class="num${it.dated ? "" : " muted"}">${it.dated ? it.recent + "건" : "-"}</td>
+        <td>${repeatDateText(it.last)}</td>
+        <td title="${escapeHtml(it.types.join(", "))}">${escapeHtml(it.types.slice(0, 3).join(", ") || "-")}</td>
+      </tr>`
+    )
+    .join("");
+
+  // 날짜를 못 읽은 건이 있으면 숨기지 않고 적습니다.
+  // 조용히 빼면 "최근 90일" 칸이 실제보다 작아 보입니다.
+  const notes = [];
+  if (rep.undated) notes.push(`날짜를 읽지 못해 '최근 ${REPEAT_RECENT_DAYS}일'에서 빠진 건 ${rep.undated.toLocaleString()}건`);
+  if (rep.noCode) notes.push(`자산번호가 비어 있어 셀 수 없는 건 ${rep.noCode.toLocaleString()}건`);
+
+  return `<div class="panel">${header}
+    <div class="panel-body">
+      <div class="table-hint">누적 건수가 많은 순입니다. 자산번호를 누르면 그 자산의 기록 전체를 볼 수 있습니다.
+        누적을 기준으로 세는 이유는, 기간으로 먼저 거르면 날짜가 비어 있는 건 때문에
+        실제로 반복된 자산이 빠지기 때문입니다.</div>
+      <div class="table-scroll"><table class="data-table center-all">
+        <thead><tr>
+          <th>자산번호</th><th class="num">누적</th>
+          <th class="num">최근 ${REPEAT_RECENT_DAYS}일</th>
+          <th>마지막 기록</th><th>유형</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${notes.length ? `<div class="empty-note" style="text-align:left; padding:10px 4px 0;">${notes.join(" · ")}</div>` : ""}
+    </div>
+  </div>`;
+}
+
+/* 자산번호를 눌렀을 때: 그 자산의 업무 기록만 모아 보여줍니다.
+   팝업 안에서 또 행을 누르면 팝업이 겹치므로 여기서는 행을 누를 수 없게 둡니다. */
+els.content.addEventListener("click", (e) => {
+  const row = e.target.closest("[data-repeat]");
+  if (!row) return;
+  const rows = REPEAT_INDEX[row.dataset.repeat];
+  if (!rows || !rows.length) return;
+
+  const code = String(pick(rows[0], "자산번호", "관리번호", "시리얼") || "").trim();
+  const sorted = rows
+    .slice()
+    .sort((a, b) => (repeatRowDate(b) ? repeatRowDate(b).getTime() : 0) - (repeatRowDate(a) ? repeatRowDate(a).getTime() : 0));
+
+  openModal(
+    `${code} · 반복 이슈 ${rows.length}건`,
+    renderTable(
+      sorted,
+      ["요청일자", "유형", "업무내용", "조치사항", "담당자", "완료일자", "진행상태"],
+      { detailTitle: "전산 업무 상세", center: true, clickable: false, limit: 0, search: false, csv: true,
+        csvName: code + " 반복 이슈" }
+    )
+  );
+});
+
 function renderJeonsan() {
   const status = getRecords("jeonsan_status");
   const asset = getRecords("jeonsan_asset");
@@ -2729,6 +3114,7 @@ function renderJeonsan() {
 
   const doneCount = status.filter((r) => (r["진행상태"] || "").includes("완료")).length;
   const ingCount = status.length - doneCount;
+  const repeat = repeatAssets(status);
 
   const now = new Date();
   const monthLabel = `${now.getFullYear()}년 ${now.getMonth() + 1}월`;
@@ -2737,9 +3123,12 @@ function renderJeonsan() {
   HANDLER_STATS = handlerMonthlyStats(status);
   const people = Object.entries(HANDLER_STATS).sort((a, b) => b[1].total - a[1].total);
 
-  CREW_QUERY = "";
-  CREW_TAB = null;
-  CREW_ROW = null;
+  // 화면을 옮길 때만 조회 상태를 지웁니다. 자동 갱신 때는 그대로 둡니다.
+  if (!KEEP_VIEW_STATE) {
+    CREW_QUERY = "";
+    CREW_TAB = null;
+    CREW_ROW = null;
+  }
 
   return `
     <div class="kpi-grid">
@@ -2747,7 +3136,10 @@ function renderJeonsan() {
       ${kpiCard("완료", doneCount + "건")}
       ${kpiCard("진행중/미완료", ingCount + "건")}
       ${kpiCard("자산 지급대장 건수", asset.length + "건")}
+      ${kpiCard("반복 이슈 자산", repeat.list.length + "대", REPEAT_MIN + "건 이상 접수된 자산번호")}
     </div>
+
+    ${repeatPanel(repeat)}
 
     <h2 class="section-title">담당자</h2>
     <p class="section-note">이름을 누르면 월별 처리 건수를 볼 수 있습니다.</p>
@@ -3964,13 +4356,17 @@ function mailSection(kind) {
 
 function renderMail() {
   // 다른 화면의 검색 상태가 남아 팝업이 헷갈리지 않도록 초기화합니다.
+  // 단, 자동 갱신으로 같은 화면을 다시 그리는 중이면 보던 검색·선택 월을 지키지 않으면
+  // 5분마다 검색어가 사라집니다.
   CREW_TAB = null;
   MAIL_MODAL_KIND = null;
-  Object.keys(MAIL_STATE).forEach((k) => {
-    MAIL_STATE[k].query = "";
-    MAIL_STATE[k].match = [];
-    MAIL_STATE[k].row = null;
-  });
+  if (!KEEP_VIEW_STATE) {
+    Object.keys(MAIL_STATE).forEach((k) => {
+      MAIL_STATE[k].query = "";
+      MAIL_STATE[k].match = [];
+      MAIL_STATE[k].row = null;
+    });
+  }
 
   const now = new Date();
   const thisKey = monthKey(now);
