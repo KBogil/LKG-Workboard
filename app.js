@@ -17,6 +17,8 @@ const els = {
   appRoot: document.getElementById("appRoot"),
   pinInput: document.getElementById("pinInput"),
   pinSubmit: document.getElementById("pinSubmit"),
+  pinSpinner: document.getElementById("pinSpinner"),
+  pinSubmitLabel: document.getElementById("pinSubmitLabel"),
   lockError: document.getElementById("lockError"),
   modalBackdrop: document.getElementById("modalBackdrop"),
   modalTitle: document.getElementById("modalTitle"),
@@ -77,11 +79,59 @@ async function decryptBlob(blob, passphrase) {
 
 /* ---------------- 잠금 화면 처리 ---------------- */
 
+/* 확인을 누르고 대시보드가 열릴 때까지 실제로 3~10초가 걸립니다
+   (PBKDF2 60만 회로 키를 만들고, 약 4MB를 복호화한 뒤 JSON 으로 바꿉니다).
+   예전에는 그동안 버튼이 흐려지기만 해서 눌린 건지 알 수 없었고,
+   저사양 PC에서는 다시 누르게 되는 일이 있었습니다.
+   그래서 버튼 글자를 두 단계로 바꿔 진행 중임을 알립니다. */
+let UNLOCK_STAGE_TIMER = null;
+
+function setUnlockBusy(busy) {
+  els.pinSubmit.disabled = busy;
+  els.pinInput.disabled = busy;
+  els.pinSpinner.hidden = !busy;
+  els.pinSubmitLabel.textContent = busy ? "확인 중…" : "확인";
+
+  // 타이머는 매번 지우고 다시 겁니다. 안 지우면 실패한 뒤에도
+  // 예전 타이머가 살아 있어 글자가 엉뚱하게 바뀝니다.
+  if (UNLOCK_STAGE_TIMER) {
+    clearTimeout(UNLOCK_STAGE_TIMER);
+    UNLOCK_STAGE_TIMER = null;
+  }
+  if (busy) {
+    // 1.5초가 지나도 안 끝나면 "멈춘 게 아니라 큰 파일을 여는 중"이라고 알립니다.
+    UNLOCK_STAGE_TIMER = setTimeout(() => {
+      els.pinSubmitLabel.textContent = "데이터를 여는 중입니다";
+    }, 1500);
+  }
+}
+
+/* 화면을 한 번 그리게 한 뒤에 무거운 일을 시작합니다.
+   복호화 뒤의 JSON.parse(수 MB)가 메인 스레드를 막기 때문에,
+   이 한 박자가 없으면 버튼 글자가 바뀌기도 전에 화면이 굳어서
+   위에서 바꾼 문구가 사용자에게 보이지 않습니다. */
+function nextPaint() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+  });
+}
+
 async function tryUnlock() {
   const pin = els.pinInput.value;
   if (!pin) return;
+
+  // 데이터 파일을 아직 못 받았으면 복호화를 시도조차 하지 않습니다.
+  // 예전에는 그냥 시도했다가 예외가 나서, 맞는 비밀번호인데도
+  // "비밀번호가 올바르지 않습니다"가 떴습니다.
+  if (!ENCRYPTED_BLOB) {
+    els.lockError.textContent = "데이터를 아직 받는 중입니다. 잠시 뒤 다시 눌러 주세요.";
+    return;
+  }
+
   els.lockError.textContent = "";
-  els.pinSubmit.disabled = true;
+  setUnlockBusy(true);
+  await nextPaint();
+
   try {
     WORKBOARD = await decryptBlob(ENCRYPTED_BLOB, pin);
     PASSPHRASE = pin;
@@ -96,7 +146,10 @@ async function tryUnlock() {
   } catch (err) {
     els.lockError.textContent = "비밀번호가 올바르지 않습니다.";
   } finally {
-    els.pinSubmit.disabled = false;
+    setUnlockBusy(false);
+    // 입력칸을 잠갔다 푸는 사이에 초점이 날아갑니다.
+    // 잠금 화면이 그대로면(=실패) 초점을 돌려줘야 Enter 로 바로 다시 시도할 수 있습니다.
+    if (els.lockOverlay.style.display !== "none") els.pinInput.focus();
   }
 }
 
@@ -164,10 +217,17 @@ async function init() {
     const res = await fetch(DATA_URL, { cache: "no-store" });
     if (!res.ok) throw new Error("데이터를 불러오지 못했습니다.");
     ENCRYPTED_BLOB = await res.json();
+    // 파일을 다 받은 지금에서야 입력을 엽니다(index.html 의 disabled 주석 참고).
     els.pinInput.disabled = false;
+    els.pinSubmit.disabled = false;
+    els.pinInput.placeholder = "비밀번호";
     els.pinInput.focus();
   } catch (err) {
-    els.lockError.textContent = "데이터 파일을 불러오지 못했습니다. (" + err.message + ")";
+    // 여기서 실패한 것은 비밀번호 문제가 아니므로 문구를 구분합니다.
+    // 입력칸은 잠근 채로 둡니다(눌러 봐야 안 되니까요).
+    els.pinInput.placeholder = "데이터를 불러오지 못했습니다";
+    els.lockError.textContent =
+      "데이터 파일을 불러오지 못했습니다. 새로고침해 주세요. (" + err.message + ")";
   }
 }
 
