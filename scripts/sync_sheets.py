@@ -38,9 +38,18 @@ OUTPUT_PATH = "data/workboard.json"
 CONFIG_PATH = "config/sources.json"
 SOURCES_ENV = "WORKBOARD_SOURCES"
 
-# 개요 화면의 직무별 담당자를 적어두는 탭 이름. 공지 시트와 같은 스프레드시트에서 찾습니다.
-# 탭이 없으면 담당자 정보 없이 넘어가고, 화면은 예전에 쓰던 이름을 그대로 보여줍니다.
+# 개요 화면의 직무별 담당자를 어디서 읽을지.
+# ① 공지 시트와 같은 탭의 오른쪽(L열~)에 있는 '구분 / 담당자 / 비고' 구역  ← 현재 이 방식
+# ② 같은 스프레드시트에 '담당자' 탭이 따로 있으면 그 탭 (탭이 있으면 탭을 먼저 씁니다)
+# 둘 다 없으면 담당자 정보 없이 넘어가고, 화면은 예전에 쓰던 이름을 그대로 보여줍니다.
 OWNER_TAB_NAMES = ("담당자", "담당자표", "직무담당자", "업무담당자")
+
+# 담당자 구역의 열 위치를 코드에 박아두면, 시트에 열을 하나 끼워 넣는 순간 어긋납니다.
+# 그래서 머리글에서 '구분'이 적힌 칸을 찾아 그 칸부터 오른쪽 전체를 담당자 구역으로 봅니다.
+# 스케줄 구역(F~J)에도 비슷한 열 이름이 있을 수 있어, K열보다 오른쪽에서만 찾습니다.
+BOARD_OWNER_MIN_COL = 10  # 0부터 세어 10 = K열
+OWNER_CATEGORY_HEADERS = ("구분", "카테고리", "직무", "분류")
+OWNER_PERSON_HEADERS = ("담당자", "이름", "성명")
 
 # 탕비실 시트에서 고정으로 쓰는 부분 (스크린샷 기준)
 TANGBISIL_HEADER_ROW = 4      # 4행: 상품명 / 박스당개입수 / 사용량 / 입고량 / (현)잔여재고 / 전월재고
@@ -697,33 +706,27 @@ def find_owner_tab(meta):
     return None
 
 
-def build_owners(spreadsheet_id, meta, access_token):
-    """개요 화면의 직무별 담당자를 시트에서 읽습니다.
+def find_owner_block(rows):
+    """공지·스케줄 탭 안에서 담당자 구역이 시작하는 열을 찾습니다.
 
-    예전에는 담당자 이름이 app.js에 박혀 있어서, 인사 이동이 있으면 코드를 고쳐야
-    했습니다. 공지 시트와 같은 스프레드시트에 '담당자' 탭을 하나 두고 거기서 읽으면
-    이후로는 시트만 고치면 됩니다.
-
-    탭 형태 (열 이름은 조금 달라도 찾습니다):
-        구분    | 담당자         | 비고
-        전산    | 이재환(Jetty)  |
-        탕비실  | 박동국(Kaju)   |
-
-    탭이 없거나 비어 있으면 빈 목록을 돌려줍니다. 그때 화면은 예전에 쓰던 이름을
-    그대로 보여주므로, 탭을 만들기 전에도 개요가 비지 않습니다.
+    머리글 줄에서 '구분'(또는 카테고리·직무·분류)이 적힌 칸을 찾고, 그 칸부터
+    오른쪽 전체를 담당자 구역으로 봅니다. 열을 하나 끼워 넣어도 따라갑니다.
     """
-    title = find_owner_tab(meta)
-    if not title:
-        print("[담당자] '담당자' 탭이 없어 건너뜁니다. "
-              "(만들면 개요의 담당자 이름을 시트에서 읽습니다)")
-        return []
+    wanted = {norm_key(h) for h in OWNER_CATEGORY_HEADERS}
+    for row in rows[:3]:  # 머리글은 위쪽 몇 줄 안에 있습니다
+        for idx in range(BOARD_OWNER_MIN_COL, len(row)):
+            if norm_key(clean_cell(row[idx])) in wanted:
+                return idx
+    return None
 
-    rows = get_values(spreadsheet_id, title, access_token, cell_range="A:F")
+
+def owner_records_to_list(records):
+    """{열이름: 값} 목록을 담당자 목록으로 정리합니다.
+    구분과 담당자가 둘 다 있어야 카드를 만들 수 있으므로, 한쪽이 비면 버립니다."""
     owners = []
-    for record in rows_to_records(rows):
-        category = first_value(record, "구분", "카테고리", "직무", "업무", "분류")
-        person = first_value(record, "담당자", "이름", "성명")
-        # 구분과 담당자가 둘 다 있어야 카드를 만들 수 있습니다.
+    for record in records:
+        category = first_value(record, *OWNER_CATEGORY_HEADERS, "업무")
+        person = first_value(record, *OWNER_PERSON_HEADERS)
         if not category or not person:
             continue
         owners.append({
@@ -731,8 +734,51 @@ def build_owners(spreadsheet_id, meta, access_token):
             "담당자": person,
             "비고": first_value(record, "비고", "메모", "설명"),
         })
+    return owners
 
-    print(f"[담당자] 탭 '{title}': {len(owners)}건 "
+
+def build_owners(spreadsheet_id, meta, access_token, board_rows):
+    """개요 화면의 직무별 담당자를 시트에서 읽습니다.
+
+    예전에는 담당자 이름이 app.js에 박혀 있어서, 인사 이동이 있으면 코드를 고쳐야
+    했습니다. 시트에서 읽으면 이후로는 시트만 고치면 됩니다.
+
+    읽는 곳은 두 가지입니다.
+      ① 공지·스케줄과 같은 탭의 오른쪽 '구분 / 담당자 / 비고' 구역 (현재 이 방식)
+      ② 같은 스프레드시트에 '담당자' 탭이 따로 있으면 그 탭
+    탭이 있으면 탭을 먼저 씁니다. 나중에 담당자 표가 길어져서 탭으로 옮겨도
+    코드를 다시 고치지 않아도 되게 두 가지를 모두 받아둡니다.
+
+    표 형태 (열 이름은 조금 달라도 찾습니다):
+        구분    | 담당자         | 비고
+        전산    | 이재환(Jetty)  |
+        탕비실  | 박동국(Kaju)   | 주 3회
+
+    둘 다 없으면 빈 목록을 돌려줍니다. 그때 화면은 예전에 쓰던 이름을 그대로
+    보여주므로 개요가 비지 않습니다.
+    """
+    # ① 별도 탭이 있으면 그쪽을 씁니다
+    title = find_owner_tab(meta)
+    if title:
+        rows = get_values(spreadsheet_id, title, access_token, cell_range="A:F")
+        owners = owner_records_to_list(rows_to_records(rows))
+        print(f"[담당자] 탭 '{title}': {len(owners)}건 "
+              f"({', '.join(o['구분'] for o in owners) or '읽은 행 없음'})")
+        return owners
+
+    # ② 공지·스케줄 탭의 오른쪽 구역
+    start = find_owner_block(board_rows)
+    if start is None:
+        print("[담당자] 담당자 구역을 찾지 못해 건너뜁니다. "
+              "(공지 탭 오른쪽에 '구분 / 담당자' 머리글을 두면 읽습니다)")
+        return []
+
+    # 구역 오른쪽 끝은 정하지 않고 행 끝까지 자릅니다. 담당자 구역 오른쪽에는
+    # 다른 구역이 없어서, 열을 더 붙여도 그대로 따라갑니다.
+    block = slice_cols(board_rows, start, 10 ** 6)
+    owners = owner_records_to_list(rows_to_records(block))
+    col_letter = chr(ord("A") + start) if start < 26 else "?"
+    print(f"[담당자] 공지 탭 {col_letter}열 구역: {len(owners)}건 "
           f"({', '.join(o['구분'] for o in owners) or '읽은 행 없음'})")
     return owners
 
@@ -855,10 +901,11 @@ def load_source(key, source, access_token, meta_cache, data):
             board = {"notice": [], "schedule": []}
         data["notice"] = board["notice"]
         data["schedule"] = board["schedule"]
-        # 담당자 탭은 같은 스프레드시트에 있습니다. 소스를 따로 등록하지 않아도 되게
-        # 여기서 함께 읽습니다. 실패해도 공지·스케줄은 그대로 갱신되도록 가둬둡니다.
+        # 담당자는 이 탭의 오른쪽 구역(또는 같은 스프레드시트의 '담당자' 탭)에 있습니다.
+        # 소스를 따로 등록하지 않아도 되게 여기서 함께 읽습니다.
+        # 실패해도 공지·스케줄은 그대로 갱신되도록 오류를 가둬둡니다.
         try:
-            data["owners"] = build_owners(spreadsheet_id, meta, access_token)
+            data["owners"] = build_owners(spreadsheet_id, meta, access_token, rows)
         except Exception:
             import traceback
             print("[오류] 담당자 탭을 읽는 중 문제가 발생했습니다.")
