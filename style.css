@@ -1153,10 +1153,39 @@ body.modal-open { overflow: hidden; }
   font-weight: 700;
   font-family: inherit;
   cursor: pointer;
+  /* 회전 표시와 글자를 나란히 두기 위해 flex 로 바꿨습니다. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .lock-box button:hover { opacity: 0.92; }
 .lock-box button:disabled { opacity: 0.55; cursor: default; }
+
+/* 확인을 누른 뒤 도는 표시(app.js setUnlockBusy 에서 켜고 끕니다).
+   이것만으로 알리지 않고 버튼 글자도 "확인 중…" → "데이터를 여는 중입니다" 로
+   함께 바뀝니다 — 움직임·색만으로 정보를 전달하지 않기 위해서입니다.
+   display 를 따로 주지 않았습니다. 주면 hidden 속성이 안 먹습니다. */
+.pin-spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: pin-spin 0.7s linear infinite;
+}
+
+@keyframes pin-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 움직임을 줄이도록 설정한 사람에게는 회전을 멈춥니다.
+   멈춰도 버튼 글자가 진행 상황을 말해 주므로 정보는 그대로입니다. */
+@media (prefers-reduced-motion: reduce) {
+  .pin-spinner { animation: none; }
+}
 
 .lock-error {
   min-height: 16px;
