@@ -43,6 +43,10 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           WORKBOARD_PIN: ${{ secrets.WORKBOARD_PIN }}
+          # 어떤 스프레드시트의 어떤 탭을 읽을지 적어둔 목록(JSON 한 덩어리).
+          # 저장소가 공개라서 스프레드시트 ID를 파일로 두지 않고 시크릿에 담습니다.
+          # 시크릿이 비어 있으면 스크립트가 config/sources.json 파일을 찾습니다.
+          WORKBOARD_SOURCES: ${{ secrets.WORKBOARD_SOURCES }}
         run: python scripts/sync_sheets.py
 
       # 웹에 올릴 파일만 _site 폴더에 모읍니다.
