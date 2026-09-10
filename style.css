@@ -2350,3 +2350,277 @@ table.data-table th.num .th-sort { justify-content: flex-end; }
   background: var(--surface-soft);
   color: var(--text-soft);
 }
+
+
+/* ---------- 개요 ① 상태 한 줄 ----------
+   상위 부서가 화면을 열고 30초 안에 "닫아도 되는가"를 판단하는 줄입니다.
+   색만으로 알리지 않으려고 왼쪽에 글자 표시(✓ / !)를 같이 둡니다. */
+.status-strip {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  margin-bottom: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--accent);
+  border-radius: 10px;
+}
+
+.status-strip.attention { border-left-color: var(--warn); }
+
+.status-flag {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 800;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.status-strip.attention .status-flag { background: var(--warn-soft); color: #8A6224; }
+
+.status-text { font-size: 15px; font-weight: 800; color: var(--text); }
+
+.status-text .status-sub {
+  margin-left: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.status-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+
+/* 누르면 해당 화면으로 갑니다. 기존 해시 이동(applyView)을 그대로 씁니다. */
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #E6D3AE;
+  background: var(--warn-soft);
+  color: #6E4E1B;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.status-chip:hover { border-color: var(--warn); }
+.status-chip b { font-weight: 800; }
+.status-chip .chip-go { color: #9A8256; font-weight: 800; }
+
+.status-ok-note { margin-left: auto; font-size: 13px; color: var(--text-soft); }
+
+/* ---------- 개요 ② 지난 방문 이후 ----------
+   방문한 날짜를 브라우저에만 남깁니다(localStorage). 시트에도 서버에도 쓰지 않습니다. */
+.since-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px 18px;
+  margin-bottom: 18px;
+  background: var(--surface-soft);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+
+.since-label { font-weight: 800; color: var(--text); }
+
+.since-item {
+  padding: 2px 9px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.since-item b { font-weight: 800; }
+
+.since-mark {
+  margin-left: auto;
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-soft);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.since-mark:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- 개요 ⑤ 이번 달 처리 현황 ----------
+   기존 .kpi-card 와 비슷하지만 증감 줄이 하나 더 붙습니다. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+
+.stat-label { font-size: 12.5px; font-weight: 700; color: var(--text-soft); }
+
+.stat-value {
+  margin-top: 6px;
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.stat-delta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 7px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+/* 증감은 화살표 글자(▲ ▼ —)와 숫자를 같이 씁니다. 색만으로 읽히지 않게 하려는 것입니다.
+   그리고 초록·빨강을 쓰지 않습니다 — 건수가 늘어난 게 좋은 일인지 나쁜 일인지
+   화면이 판단할 수 없기 때문입니다. --delta-* 는 이미 검증된 앰버/청록 조합입니다. */
+.stat-delta .up { color: var(--delta-up); }
+.stat-delta .down { color: var(--delta-down); }
+.stat-delta .zero { color: var(--delta-zero); }
+.stat-delta .avg { color: var(--text-soft); font-weight: 600; }
+
+/* ---------- 개요 ⑥⑦ 소진 예측 ----------
+   막대그래프를 쓰지 않는 이유: 관리자가 이 화면에서 실제로 하는 일은
+   "다음 발주에 무엇을 넣을까" 입니다. 막대는 한 번 해석해야 하지만
+   발주 회차 카드는 그대로 발주서가 됩니다. */
+.fc-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+
+.fc-card {
+  padding: 14px 16px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* 첫 카드만 테두리와 배경을 다르게 둡니다. 색만이 아니라 '다음 발주'라는
+   글자와 맨 왼쪽이라는 자리로도 구분됩니다. */
+.fc-card.next {
+  padding: 13px 15px;
+  background: var(--surface);
+  border-color: var(--accent);
+  border-width: 2px;
+}
+
+.fc-card-lead { font-size: 11px; font-weight: 800; letter-spacing: 0.02em; color: var(--text-soft); }
+.fc-card.next .fc-card-lead { color: var(--accent); }
+
+.fc-card-when { margin-top: 3px; font-size: 17px; font-weight: 800; }
+
+.fc-card-when small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.fc-card-n {
+  display: inline-block;
+  margin-top: 9px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: #2B4A44;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fc-card-list {
+  list-style: none;
+  margin: 11px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.fc-card-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+
+.fc-card-list li.head { padding-bottom: 6px; font-size: 10.5px; font-weight: 700; color: var(--text-soft); }
+.fc-card-list li.fc-none { color: var(--text-soft); }
+
+.fc-item-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fc-card-list li.head .fc-item-name,
+.fc-card-list li.fc-none { font-weight: 700; }
+
+.fc-item-left { flex-shrink: 0; color: var(--text-soft); font-variant-numeric: tabular-nums; }
+
+.fc-rest {
+  margin: 16px 0 0;
+  padding-top: 13px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--text-soft);
+}
+
+.fc-rest b { color: var(--text); }
+.fc-rest .fc-rest-tag { margin-right: 6px; font-weight: 800; color: var(--text); }
+
+/* ---------- 개요 ⑧ 담당자 한 줄 ----------
+   담당자 카드 5장을 지우는 대신 연락처는 맨 아래 한 줄로 남깁니다.
+   문제가 생겼을 때만 필요한 정보라 자리를 위에서 아래로 옮긴 것입니다. */
+.owner-line {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 26px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+
+.owner-line strong { color: var(--text); font-weight: 800; }
+.owner-line .ow { color: var(--text); }
+.owner-line .ow b { font-weight: 700; }
+/* 재고 표의 .dot 과 이름이 같아서 .owner-line 안으로 한정합니다. */
+.owner-line .dot { color: var(--border); }
+
+/* ---------- 개요: 좁은 화면 ---------- */
+@media (max-width: 900px) {
+  .fc-cards { grid-template-columns: 1fr; }
+  .status-chips,
+  .status-ok-note { margin-left: 0; width: 100%; }
+  .since-mark { margin-left: 0; }
+}
