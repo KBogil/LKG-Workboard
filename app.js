@@ -758,6 +758,167 @@ function tableMoreHtml(state) {
   </div>`;
 }
 
+/* ---------------- 인쇄 · PDF로 저장 ----------------
+
+   PDF 라이브러리(jsPDF 등)를 쓰지 않는 이유:
+   한글을 PDF 에 넣으려면 글꼴을 통째로 파일에 심어야 하고 그것만 수 MB 입니다.
+   첫 진입에 4MB 를 내려받아 복호화하느라 이미 3~10초가 걸리는 화면에 그 무게를
+   더할 이유가 없습니다. 표의 줄바꿈·페이지 나눔도 전부 직접 계산해야 해서
+   코드가 길어지고 잘 깨집니다.
+
+   대신 브라우저 인쇄 창을 띄웁니다. 사용자는 '대상'에서 'PDF로 저장'을 고르면 됩니다.
+   한글 글꼴 문제가 없고, 라이브러리 0, 용량 증가 0이며,
+   페이지 나눔 · 머리글 반복 · 여백은 브라우저가 알아서 해줍니다.
+
+   화면을 그대로 인쇄하지 않고 '숨은 프레임에 인쇄 전용 문서'를 새로 만드는 이유:
+   사이드바 · 검색칸 · 버튼이 딸려 나오지 않고, 보고서 머리글(제목 · 기준일시 ·
+   대외 공유 금지)을 제대로 붙일 수 있습니다.
+   화면 CSS 를 @media print 로 덧칠하는 방식보다 결과가 예측 가능합니다. */
+
+const PRINT_WARN_ROWS = 600; // 이보다 많으면 몇 쪽인지 알리고 한 번 물어봅니다
+const PRINT_ROWS_PER_PAGE = 42; // 쪽수 어림짐작용 (A4 세로 기준)
+
+function printStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(
+    d.getMinutes()
+  )}`;
+}
+
+/* 인쇄 전용 문서의 스타일.
+   브라우저는 기본적으로 배경색을 찍지 않습니다. 그래서 색에 기대지 않고
+   선 · 굵기 · 글자로만 구분합니다 — "색만으로 정보를 전달하지 않는다"는 원칙이
+   여기서 그대로 값을 합니다. */
+function printCss() {
+  return `
+    @page { size: A4; margin: 14mm 12mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Malgun Gothic', '맑은 고딕', sans-serif;
+           font-size: 10pt; color: #000; line-height: 1.5; }
+
+    .p-head { border-bottom: 2px solid #000; padding-bottom: 6pt; margin-bottom: 10pt; }
+    .p-title { font-size: 15pt; font-weight: 800; margin: 0 0 3pt; }
+    .p-meta { font-size: 8.5pt; color: #333; }
+    .p-warn { display: inline-block; margin-top: 5pt; padding: 1pt 6pt;
+              border: 1px solid #000; font-size: 8pt; font-weight: 700; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+    /* 쪽이 넘어가도 표 머리글을 다시 찍습니다 */
+    thead { display: table-header-group; }
+    tr { page-break-inside: avoid; }
+    th, td { border: 1px solid #999; padding: 3pt 4pt; text-align: left;
+             vertical-align: top; word-break: break-all; }
+    th { background: #eee; font-weight: 700;
+         -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    td.num, th.num { text-align: right; }
+
+    .p-sec { margin-top: 14pt; }
+    .p-sec > h2 { font-size: 11.5pt; margin: 0 0 6pt;
+                  border-left: 3pt solid #000; padding-left: 6pt; }
+    .p-note { font-size: 8.5pt; color: #333; margin: 5pt 0 0; }
+
+    .p-item { page-break-inside: avoid; border: 1px solid #999; padding: 6pt 8pt; margin-bottom: 6pt; }
+    .p-item h3 { font-size: 10.5pt; margin: 0 0 3pt; }
+    .p-item .p-sub { font-size: 8.5pt; color: #333; margin: 0 0 4pt; }
+    .p-item ul, .p-item ol { margin: 2pt 0 4pt 15pt; padding: 0; font-size: 9pt; }
+    .p-item li { margin: 1pt 0; }
+    .p-item .p-label { font-weight: 700; font-size: 9pt; }
+  `;
+}
+
+/* 숨은 프레임에 문서를 만들어 인쇄 창을 띄웁니다.
+   cfg: { fileName, heading, meta, body } */
+function printDocument(cfg) {
+  const old = document.getElementById("printFrame");
+  if (old) old.remove();
+
+  const frame = document.createElement("iframe");
+  frame.id = "printFrame";
+  frame.setAttribute("aria-hidden", "true");
+  // display:none 으로 두면 내용을 아예 그리지 않는 브라우저가 있어서,
+  // 크기를 0으로 만들어 화면 밖에 숨깁니다.
+  frame.style.cssText =
+    "position:fixed; right:0; bottom:0; width:0; height:0; border:0; opacity:0;";
+  document.body.appendChild(frame);
+
+  const doc = frame.contentWindow.document;
+  doc.open();
+  doc.write(
+    `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">` +
+      // 크롬은 이 <title> 을 PDF 파일 이름의 기본값으로 씁니다.
+      `<title>${escapeHtml(cfg.fileName || "워크보드")}</title>` +
+      `<style>${printCss()}</style></head><body>` +
+      `<div class="p-head">
+         <p class="p-title">${escapeHtml(cfg.heading || "")}</p>
+         <div class="p-meta">LKG Workboard${cfg.meta ? " · " + escapeHtml(cfg.meta) : ""} · 출력 ${printStamp()}</div>
+         <span class="p-warn">대외 공유 금지</span>
+       </div>` +
+      (cfg.body || "") +
+      `</body></html>`
+  );
+  doc.close();
+
+  const go = () => {
+    try {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+    } catch (e) {
+      /* 인쇄를 막아 둔 환경. 화면은 그대로 둡니다. */
+    }
+    // 바로 지우면 인쇄가 취소되는 브라우저가 있어 넉넉히 기다린 뒤 치웁니다.
+    setTimeout(() => frame.remove(), 60000);
+  };
+  // 글꼴과 레이아웃이 자리 잡은 뒤에 인쇄 창을 띄웁니다.
+  if (doc.readyState === "complete") setTimeout(go, 150);
+  else frame.onload = () => setTimeout(go, 150);
+}
+
+/* 표 하나를 인쇄용 표로 바꿉니다. 화면의 검색 · 정렬 순서를 그대로 씁니다. */
+function tablePrintHtml(state) {
+  const head = state.cols
+    .map((c) => `<th class="${isNumericColumn(c) ? "num" : ""}">${escapeHtml(c)}</th>`)
+    .join("");
+  const rows = state.order
+    .map((rowIdx) => {
+      const r = state.records[rowIdx];
+      const cells = state.cols
+        .map((c) => {
+          const v = r[c];
+          const text = v === undefined || v === null || v === "" ? "-" : String(v);
+          return `<td class="${isNumericColumn(c) ? "num" : ""}">${escapeHtml(text)}</td>`;
+        })
+        .join("");
+      return `<tr>${cells}</tr>`;
+    })
+    .join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function printTable(state) {
+  const n = state.order.length;
+
+  // 긴 표를 그냥 인쇄하면 수십 쪽짜리 파일이 나옵니다.
+  // 막지는 않되, 몇 쪽인지 알려주고 검색으로 줄이는 길을 안내합니다.
+  if (n > PRINT_WARN_ROWS) {
+    const pages = Math.ceil(n / PRINT_ROWS_PER_PAGE);
+    const go = window.confirm(
+      `${n.toLocaleString()}건을 인쇄하면 ${pages.toLocaleString()}쪽쯤 됩니다.\n` +
+        `표 위 검색칸으로 먼저 줄이면 필요한 것만 뽑을 수 있습니다.\n\n` +
+        `그대로 진행할까요?`
+    );
+    if (!go) return;
+  }
+
+  const name = String(state.name || "표").replace(/\s*상세\s*$/, "") || "표";
+  printDocument({
+    fileName: `워크보드_${name}_${csvStamp()}`,
+    heading: name,
+    meta: `${n.toLocaleString()}건${state.query ? ` · 검색어: ${state.query}` : ""}`,
+    body: tablePrintHtml(state),
+  });
+}
+
 /* 검색해서 한 건도 없을 때. 표를 통째로 지우지 않고 한 줄로 알립니다.
    머리글이 남아 있어야 "무엇으로 찾고 있었는지"가 보입니다. */
 function tableEmptyRowHtml(state) {
@@ -778,12 +939,19 @@ function tableToolsHtml(state) {
       <span class="table-found" aria-live="polite">${tableFoundText(state)}</span>`
     : "";
 
-  const csv = state.csvOn
-    ? `<button class="table-csv-btn" data-csv-table="${state.id}"
-        title="지금 화면의 검색 결과와 정렬 순서 그대로 내려받습니다">CSV 내려받기</button>`
+  // PDF 는 브라우저 인쇄 창을 띄우고 거기서 'PDF로 저장'을 고르는 방식입니다.
+  // 단추 이름에 (인쇄)를 같이 적어 두면 인쇄 창이 떠도 당황하지 않습니다.
+  const pdf = state.printOn
+    ? `<button class="table-pdf-btn" data-print-table="${state.id}"
+        title="인쇄 창이 열립니다. '대상'에서 'PDF로 저장'을 고르면 PDF 가 됩니다">PDF로 저장</button>`
     : "";
 
-  return `<div class="table-tools">${search}<span class="table-tools-gap"></span>${csv}</div>`;
+  const csv = state.csvOn
+    ? `<button class="table-csv-btn" data-csv-table="${state.id}"
+        title="엑셀에서 다시 가공할 때 씁니다. 화면의 검색 결과와 정렬 순서 그대로 내려받습니다">CSV</button>`
+    : "";
+
+  return `<div class="table-tools">${search}<span class="table-tools-gap"></span>${pdf}${csv}</div>`;
 }
 
 function tableFoundText(state) {
@@ -911,9 +1079,14 @@ function renderTable(records, columns, opts) {
     clickable: options.clickable !== false,
     title: options.detailTitle || "상세 내용",
     name: options.csvName || options.detailTitle || "표",
-    // 검색칸은 긴 표에만. CSV 는 비어 있지 않은 표면 모두.
+    // 검색칸은 긴 표에만. PDF 는 비어 있지 않은 표면 모두.
     searchOn: options.search === undefined ? records.length >= TABLE_SEARCH_MIN : !!options.search,
-    csvOn: options.csv === undefined ? true : !!options.csv,
+    printOn: options.print === undefined ? true : !!options.print,
+    // CSV 는 '긴 표'에만 남깁니다.
+    // 짧은 표는 PDF 한 장이면 끝이라 단추가 둘이면 화면만 복잡해집니다.
+    // 반대로 긴 표는 인쇄하면 수십 쪽이 되므로(우편물 6,800건이면 160쪽이 넘습니다)
+    // 엑셀로 넘길 길이 반드시 있어야 합니다. 기준이 자연히 갈립니다.
+    csvOn: options.csv === undefined ? records.length > TABLE_PAGE : !!options.csv,
     query: "",
     sortCol: null,
     sortDir: 1,
@@ -1030,6 +1203,15 @@ document.addEventListener("click", (e) => {
   const state = TABLE_REGISTRY[btn.dataset.csvTable];
   if (!state) return;
   downloadTableCsv(state);
+});
+
+/* PDF로 저장(인쇄) 단추. 본문과 팝업 양쪽의 표에서 모두 동작합니다. */
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-print-table]");
+  if (!btn) return;
+  const state = TABLE_REGISTRY[btn.dataset.printTable];
+  if (!state) return;
+  printTable(state);
 });
 
 /* 표의 행을 눌렀을 때 팝업을 띄웁니다 (화면을 새로 그려도 계속 동작하도록 위임 처리). */
@@ -3033,78 +3215,374 @@ function repeatAssets(status) {
   return { list, noCode, undated };
 }
 
-function repeatPanel(rep) {
-  const header = `<div class="panel-header">
-      <h2>반복 이슈 · 교체 검토 후보</h2>
-      <span class="panel-meta">같은 자산번호로 ${REPEAT_MIN}건 이상</span>
-    </div>`;
+/* ---------------- 증상 갈래 사전 ----------------
 
-  if (!rep.list.length) {
-    return `<div class="panel">${header}
-      <div class="panel-body"><div class="empty-note">같은 자산번호로 ${REPEAT_MIN}건 이상 접수된 자산이 없습니다.${
-        rep.noCode ? ` (자산번호가 비어 있어 셀 수 없는 건 ${rep.noCode.toLocaleString()}건)` : ""
-      }</div></div>
-    </div>`;
-  }
+   업무내용의 낱말을 보고 갈래를 짚고, 그 갈래의 흔한 원인과 확인 순서를 같이 보여줍니다.
+   AI 도 API 도 아닙니다. 전부 브라우저 안 계산이고 밖으로 나가는 것이 없습니다.
 
-  const rows = rep.list
-    .map(
-      (it) => `<tr class="row-clickable" data-repeat="${escapeHtml(it.key)}">
-        <td class="cell-strong">${escapeHtml(it.code)}</td>
-        <td class="num"><strong>${it.total}건</strong></td>
-        <td class="num${it.dated ? "" : " muted"}">${it.dated ? it.recent + "건" : "-"}</td>
-        <td>${repeatDateText(it.last)}</td>
-        <td title="${escapeHtml(it.types.join(", "))}">${escapeHtml(it.types.slice(0, 3).join(", ") || "-")}</td>
-      </tr>`
-    )
-    .join("");
+   지금은 기본 6갈래를 코드에 두었습니다. 시트에 '전산_진단규칙' 탭이 생겨
+   jeonsan_rules 로 들어오면 그쪽을 먼저 씁니다 (열: 갈래 / 증상 낱말 / 원인 후보 / 확인 순서,
+   여러 개는 세미콜론으로 구분). 사전 관리를 시트 편집으로 끝내려는 것인데,
+   먼저 기본값으로 쓸모를 확인한 뒤에 옮기는 순서입니다.
+   (사전을 먼저 채우다가 아무도 안 보는 결과가 되는 것을 피하려는 것입니다)
 
-  // 날짜를 못 읽은 건이 있으면 숨기지 않고 적습니다.
-  // 조용히 빼면 "최근 90일" 칸이 실제보다 작아 보입니다.
-  const notes = [];
-  if (rep.undated) notes.push(`날짜를 읽지 못해 '최근 ${REPEAT_RECENT_DAYS}일'에서 빠진 건 ${rep.undated.toLocaleString()}건`);
-  if (rep.noCode) notes.push(`자산번호가 비어 있어 셀 수 없는 건 ${rep.noCode.toLocaleString()}건`);
+   갈래는 위에서부터 순서대로 맞춰 보고 **처음 걸리는 하나**로 정합니다.
+   한 건이 두 갈래에 들어가면 건수가 부풀려집니다. 그래서 구체적인 갈래를 위에 둡니다.
+   맞는 갈래가 없으면 억지로 끼워 맞추지 않고 '분류 안 됨'으로 따로 셉니다. */
+const SYMPTOM_RULES_DEFAULT = [
+  {
+    label: "인쇄 · 출력",
+    test: /인쇄|출력|프린|토너|용지|복합기|스캔|잉크|걸림/i,
+    causes: ["용지 · 토너 소진", "드라이버 · 기본 프린터 설정 어긋남", "네트워크 프린터 IP 변경", "롤러 마모로 인한 용지 걸림"],
+    steps: ["용지함과 토너 잔량 확인", "다른 PC 에서 같은 문서 출력해 보기(장비 문제인지 PC 문제인지 갈림)", "드라이버 삭제 후 재설치", "프린터 IP 와 포트 설정 확인"],
+  },
+  {
+    label: "부팅 · 전원",
+    test: /부팅|전원|안\s*켜|켜지지|먹통|블루\s*스크린|블루스크린|재부팅|꺼짐|다운|멈춤|정지/i,
+    causes: ["전원 어댑터 · 케이블 접촉 불량", "메모리(RAM) 접촉 불량", "저장장치(SSD) 수명", "먼지 · 과열로 인한 자동 종료"],
+    steps: ["다른 어댑터 · 다른 콘센트로 교차 확인", "메모리 재장착 후 부팅", "이벤트 뷰어에서 종료 기록 확인", "같은 자산에서 반복되면 수리보다 교체 검토"],
+  },
+  {
+    label: "계정 · 권한",
+    test: /계정|비밀번호|패스워드|로그인|로그온|권한|잠김|잠금|인증|otp|2차|메일함|사번/i,
+    causes: ["비밀번호 만료 · 연속 실패로 인한 잠금", "부서 이동 후 권한 그룹 미반영", "2차 인증 기기 변경", "퇴사자 계정 정리 누락"],
+    steps: ["계정 잠금 여부와 마지막 로그인 시각 확인", "권한 그룹이 현재 부서와 맞는지 확인", "2차 인증 기기 재등록", "임시 비밀번호 발급 후 최초 로그인 시 변경 강제"],
+  },
+  {
+    label: "네트워크 · 원격 접속",
+    test: /네트워크|인터넷|와이파이|wifi|무선|유선|랜|lan|원격|vpn|접속|연결|끊김|느림|지연|공유기|ip/i,
+    causes: ["랜 케이블 · 포트 불량", "IP 충돌 또는 DHCP 임대 실패", "VPN 인증서 만료", "특정 시간대 회선 혼잡"],
+    steps: ["다른 포트 · 다른 케이블로 교차 확인", "IP 재할당 후 재연결", "같은 층 다른 자리에서도 같은지 확인(자리 문제인지 장비 문제인지 갈림)", "여러 사람이 같은 시간대에 겪으면 회선 · 공유기 쪽을 먼저 봅니다"],
+  },
+  {
+    label: "주변기기",
+    test: /마우스|키보드|모니터|듀얼|도킹|케이블|헤드셋|이어폰|웹캠|카메라|usb|허브|충전|배터리|스피커|마이크/i,
+    causes: ["케이블 · 단자 접촉 불량", "도킹 스테이션 전력 부족", "드라이버 미설치", "소모품 수명(배터리 · 케이블)"],
+    steps: ["다른 포트에 꽂아 확인", "다른 PC 에 연결해 기기 자체 문제인지 확인", "드라이버 · 펌웨어 갱신", "소모품이면 교체 주기를 기록해 둡니다"],
+  },
+  {
+    label: "소프트웨어 · 설치",
+    test: /설치|재설치|업데이트|오류|에러|error|프로그램|오피스|office|엑셀|한글|아래아|라이선스|정품|백신|바이러스|권한없음|실행/i,
+    causes: ["라이선스 만료 · 미할당", "업데이트 중단으로 인한 파일 손상", "보안 프로그램과의 충돌", "설치 권한 부족"],
+    steps: ["라이선스 할당 상태 확인", "완전 삭제 후 재설치", "백신을 잠시 끄고 설치해 충돌 여부 확인", "같은 프로그램에서 여러 명이 겪으면 버전 · 배포본을 먼저 봅니다"],
+  },
+];
 
-  return `<div class="panel">${header}
-    <div class="panel-body">
-      <div class="table-hint">누적 건수가 많은 순입니다. 자산번호를 누르면 그 자산의 기록 전체를 볼 수 있습니다.
-        누적을 기준으로 세는 이유는, 기간으로 먼저 거르면 날짜가 비어 있는 건 때문에
-        실제로 반복된 자산이 빠지기 때문입니다.</div>
-      <div class="table-scroll"><table class="data-table center-all">
-        <thead><tr>
-          <th>자산번호</th><th class="num">누적</th>
-          <th class="num">최근 ${REPEAT_RECENT_DAYS}일</th>
-          <th>마지막 기록</th><th>유형</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>
-      ${notes.length ? `<div class="empty-note" style="text-align:left; padding:10px 4px 0;">${notes.join(" · ")}</div>` : ""}
-    </div>
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function splitList(raw) {
+  return String(raw || "")
+    .split(/[;|]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/* 시트 탭이 있으면 그쪽을, 없으면 기본 사전을 씁니다. */
+function symptomRules() {
+  const rows = getRecords("jeonsan_rules");
+  if (!rows.length) return SYMPTOM_RULES_DEFAULT;
+
+  const out = [];
+  rows.forEach((r) => {
+    const label = String(pick(r, "갈래", "분류", "구분") || "").trim();
+    const words = splitList(pick(r, "증상 낱말", "낱말", "키워드"));
+    if (!label || !words.length) return;
+    try {
+      out.push({
+        label,
+        test: new RegExp(words.map(escapeRegExp).join("|"), "i"),
+        causes: splitList(pick(r, "원인 후보", "원인")),
+        steps: splitList(pick(r, "확인 순서", "조치 순서", "순서")),
+      });
+    } catch (e) {
+      // 낱말에 이상한 기호가 들어가 정규식이 깨지면 그 줄만 건너뜁니다.
+      // 사전 한 줄 때문에 기능 전체가 멎으면 안 됩니다.
+    }
+  });
+  return out.length ? out : SYMPTOM_RULES_DEFAULT;
+}
+
+/* 업무내용을 갈래별로 묶습니다.
+   같은 갈래가 서로 다른 자산 여러 대에서 나오면 개별 고장이 아니라
+   공통 원인(전원 환경 · 배포본 · 회선)일 수 있습니다. 그게 이 화면의 요점입니다. */
+const SYMPTOM_MIN = 2; // 몇 건부터 보여줄지
+
+/* '해당 자산'을 몇 개까지 적을지. 나머지는 '외 N대'로 줄입니다.
+   한 갈래에 수백 대가 걸리면 목록이 화면 한 폭 · 인쇄 반 쪽을 잡아먹습니다.
+   인쇄본은 종이라 스크롤이 없으므로 화면보다 조금 넉넉하게 둡니다. */
+const SYMPTOM_CODE_CAP = 12;
+const PRINT_CODE_CAP = 40;
+
+function symptomGroups(status) {
+  const rules = symptomRules();
+  const buckets = rules.map((r) => ({ label: r.label, causes: r.causes, steps: r.steps, rows: [] }));
+  let unmatched = 0;
+  let noText = 0;
+
+  status.forEach((r) => {
+    const text = String(pick(r, "업무내용", "내용", "요청내용") || "").trim();
+    if (!text) {
+      noText += 1;
+      return;
+    }
+    // 처음 걸리는 갈래 하나로만 셉니다 (두 갈래에 넣으면 건수가 부풀려집니다).
+    const hit = rules.findIndex((rule) => rule.test.test(text));
+    if (hit === -1) {
+      unmatched += 1;
+      return;
+    }
+    buckets[hit].rows.push(r);
+  });
+
+  const list = buckets
+    .filter((b) => b.rows.length >= SYMPTOM_MIN)
+    .map((b) => {
+      const codes = [];
+      const seen = new Set();
+      b.rows.forEach((r) => {
+        const code = String(pick(r, "자산번호", "관리번호", "시리얼") || "").trim();
+        if (!code) return;
+        const key = flatCode(code);
+        if (seen.has(key)) return;
+        seen.add(key);
+        codes.push(code);
+      });
+      return { ...b, total: b.rows.length, codes };
+    })
+    // 자산이 여러 대 걸린 갈래를 위로 (공통 원인 신호가 강한 쪽)
+    .sort((a, b) => b.codes.length - a.codes.length || b.total - a.total);
+
+  return { list, unmatched, noText };
+}
+
+/* ---------------- 반복 이슈: 화면의 한 줄 + 팝업 ----------------
+
+   예전에는 전산 화면에 표를 통째로 펼쳐 두었는데, 매일 보는 화면에서 그만큼 자리를
+   차지할 내용은 아닙니다. 한 줄로 줄이고 필요할 때 팝업으로 엽니다. */
+let REPEAT_LAST = null; // 지금 화면의 계산 결과 (팝업 · 인쇄에서 다시 씁니다)
+
+function repeatBar(rep, sym) {
+  const parts = [];
+  parts.push(`반복 자산 <b>${rep.list.length}대</b>`);
+  parts.push(`같은 증상 <b>${sym.list.length}갈래</b>`);
+
+  const empty = !rep.list.length && !sym.list.length;
+  return `<div class="repeat-bar">
+    <span class="repeat-bar-tag">반복 이슈</span>
+    <span class="repeat-bar-sum">${
+      empty
+        ? `같은 자산번호로 ${REPEAT_MIN}건 이상 접수된 건이 없습니다.`
+        : parts.join(" · ") + ` <span class="repeat-bar-note">— 교체 · 공통 원인 검토 대상</span>`
+    }</span>
+    <button class="repeat-bar-btn" data-repeat-open ${empty ? "disabled" : ""}>자세히 보기</button>
   </div>`;
 }
 
-/* 자산번호를 눌렀을 때: 그 자산의 업무 기록만 모아 보여줍니다.
-   팝업 안에서 또 행을 누르면 팝업이 겹치므로 여기서는 행을 누를 수 없게 둡니다. */
-els.content.addEventListener("click", (e) => {
-  const row = e.target.closest("[data-repeat]");
-  if (!row) return;
-  const rows = REPEAT_INDEX[row.dataset.repeat];
-  if (!rows || !rows.length) return;
-
-  const code = String(pick(rows[0], "자산번호", "관리번호", "시리얼") || "").trim();
+/* 자산 한 대의 기록을 작은 표로. 팝업 안이라 renderTable 을 쓰지 않습니다
+   (표 도구 줄과 '더 보기'가 팝업 안에서 중복으로 붙습니다). */
+function repeatRowsTable(rows) {
+  const cols = ["요청일자", "유형", "업무내용", "조치사항", "담당자", "진행상태"];
   const sorted = rows
     .slice()
-    .sort((a, b) => (repeatRowDate(b) ? repeatRowDate(b).getTime() : 0) - (repeatRowDate(a) ? repeatRowDate(a).getTime() : 0));
-
-  openModal(
-    `${code} · 반복 이슈 ${rows.length}건`,
-    renderTable(
-      sorted,
-      ["요청일자", "유형", "업무내용", "조치사항", "담당자", "완료일자", "진행상태"],
-      { detailTitle: "전산 업무 상세", center: true, clickable: false, limit: 0, search: false, csv: true,
-        csvName: code + " 반복 이슈" }
+    .sort((a, b) => {
+      const da = repeatRowDate(a);
+      const db = repeatRowDate(b);
+      return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+    });
+  const body = sorted
+    .map(
+      (r) =>
+        "<tr>" +
+        cols
+          .map((c) => {
+            const v = pick(r, c);
+            const text = v === undefined || v === null || v === "" ? "-" : String(v);
+            return `<td>${escapeHtml(text)}</td>`;
+          })
+          .join("") +
+        "</tr>"
     )
+    .join("");
+  return `<div class="table-scroll"><table class="data-table rp-table">
+    <thead><tr>${cols.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+}
+
+function repeatModalHtml(rep, sym) {
+  // ① 자산번호별
+  const assets = rep.list.length
+    ? rep.list
+        .map(
+          (it) => `<details class="rp-item">
+            <summary>
+              <span class="rp-code">${escapeHtml(it.code)}</span>
+              <span class="rp-chip">누적 <b>${it.total}건</b></span>
+              <span class="rp-chip${it.dated ? "" : " muted"}">최근 ${REPEAT_RECENT_DAYS}일 ${
+            it.dated ? it.recent + "건" : "확인 불가"
+          }</span>
+              <span class="rp-chip muted">마지막 ${repeatDateText(it.last)}</span>
+            </summary>
+            ${repeatRowsTable(REPEAT_INDEX[it.key] || [])}
+          </details>`
+        )
+        .join("")
+    : `<div class="empty-note">같은 자산번호로 ${REPEAT_MIN}건 이상 접수된 자산이 없습니다.</div>`;
+
+  const assetNotes = [];
+  if (rep.undated)
+    assetNotes.push(`날짜를 읽지 못해 '최근 ${REPEAT_RECENT_DAYS}일'에서 빠진 건 ${rep.undated.toLocaleString()}건`);
+  if (rep.noCode) assetNotes.push(`자산번호가 비어 있어 셀 수 없는 건 ${rep.noCode.toLocaleString()}건`);
+
+  // ② 같은 증상별
+  const syms = sym.list.length
+    ? sym.list
+        .map(
+          (g) => `<div class="rp-sym">
+            <h4>${escapeHtml(g.label)}
+              <span class="rp-sym-n">${g.total}건${
+            g.codes.length ? ` · 자산 ${g.codes.length}대` : ""
+          }</span>
+            </h4>
+            ${
+              g.codes.length
+                ? `<p class="rp-codes"><span class="p-label">해당 자산</span> ${escapeHtml(
+                    g.codes.slice(0, SYMPTOM_CODE_CAP).join(", ")
+                  )}${
+                    g.codes.length > SYMPTOM_CODE_CAP
+                      ? ` 외 ${g.codes.length - SYMPTOM_CODE_CAP}대`
+                      : ""
+                  }</p>`
+                : `<p class="rp-codes muted">자산번호가 적히지 않은 건입니다.</p>`
+            }
+            <div class="rp-fix">
+              <div><span class="p-label">흔한 원인</span>
+                <ul>${g.causes.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul></div>
+              <div><span class="p-label">확인 순서</span>
+                <ol>${g.steps.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ol></div>
+            </div>
+          </div>`
+        )
+        .join("")
+    : `<div class="empty-note">같은 증상으로 ${SYMPTOM_MIN}건 이상 묶인 갈래가 없습니다.</div>`;
+
+  const symNotes = [];
+  if (sym.unmatched) symNotes.push(`어느 갈래에도 맞지 않은 건 ${sym.unmatched.toLocaleString()}건`);
+  if (sym.noText) symNotes.push(`업무내용이 비어 있는 건 ${sym.noText.toLocaleString()}건`);
+
+  return `<div class="rp-top">
+      <p class="rp-lead">누적 건수가 많은 순입니다. 기간으로 먼저 거르지 않는 이유는,
+        날짜가 비어 있는 건 때문에 실제로 반복된 자산이 빠지기 때문입니다.</p>
+      <button class="rp-print" data-print-repeat>PDF로 저장</button>
+    </div>
+
+    <h3 class="rp-h">① 자산번호별 반복</h3>
+    <p class="rp-sub">자산번호를 누르면 그 자산의 기록이 펼쳐집니다.</p>
+    ${assets}
+    ${assetNotes.length ? `<p class="rp-note">${assetNotes.join(" · ")}</p>` : ""}
+
+    <h3 class="rp-h">② 같은 증상으로 묶인 갈래</h3>
+    <p class="rp-sub">업무내용의 낱말로 갈래를 짚은 것입니다.
+      <strong>여러 자산에서 같은 증상이 나오면 개별 고장이 아니라 공통 원인</strong>(전원 환경 ·
+      배포본 · 회선 · 설정)일 수 있습니다. 아래 원인과 순서는 일반적인 확인 절차이므로
+      현장 판단이 우선입니다.</p>
+    ${syms}
+    ${symNotes.length ? `<p class="rp-note">${symNotes.join(" · ")} — 억지로 끼워 맞추지 않고 따로 셉니다.</p>` : ""}`;
+}
+
+/* 팝업 내용을 인쇄용으로 다시 짭니다.
+   화면용 <details> 는 접힌 채로 인쇄되므로, 인쇄본에서는 전부 펼쳐 적습니다. */
+function repeatPrintHtml(rep, sym) {
+  const assets = rep.list
+    .map((it) => {
+      const rows = REPEAT_INDEX[it.key] || [];
+      const cols = ["요청일자", "유형", "업무내용", "조치사항", "담당자", "진행상태"];
+      const body = rows
+        .slice()
+        .sort((a, b) => {
+          const da = repeatRowDate(a);
+          const db = repeatRowDate(b);
+          return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+        })
+        .map(
+          (r) =>
+            "<tr>" +
+            cols
+              .map((c) => {
+                const v = pick(r, c);
+                return `<td>${escapeHtml(v === undefined || v === null || v === "" ? "-" : String(v))}</td>`;
+              })
+              .join("") +
+            "</tr>"
+        )
+        .join("");
+      return `<div class="p-item">
+        <h3>${escapeHtml(it.code)}</h3>
+        <p class="p-sub">누적 ${it.total}건 · 최근 ${REPEAT_RECENT_DAYS}일 ${
+        it.dated ? it.recent + "건" : "확인 불가"
+      } · 마지막 ${repeatDateText(it.last)}</p>
+        <table><thead><tr>${cols.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>
+        <tbody>${body}</tbody></table>
+      </div>`;
+    })
+    .join("");
+
+  const syms = sym.list
+    .map(
+      (g) => `<div class="p-item">
+        <h3>${escapeHtml(g.label)} — ${g.total}건${g.codes.length ? ` · 자산 ${g.codes.length}대` : ""}</h3>
+        ${
+          g.codes.length
+            ? `<p class="p-sub">해당 자산: ${escapeHtml(g.codes.slice(0, PRINT_CODE_CAP).join(", "))}${
+                g.codes.length > PRINT_CODE_CAP ? ` 외 ${g.codes.length - PRINT_CODE_CAP}대` : ""
+              }</p>`
+            : ""
+        }
+        <span class="p-label">흔한 원인</span>
+        <ul>${g.causes.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>
+        <span class="p-label">확인 순서</span>
+        <ol>${g.steps.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ol>
+      </div>`
+    )
+    .join("");
+
+  const notes = [];
+  if (rep.undated) notes.push(`날짜를 읽지 못한 건 ${rep.undated.toLocaleString()}건`);
+  if (rep.noCode) notes.push(`자산번호가 비어 있는 건 ${rep.noCode.toLocaleString()}건`);
+  if (sym.unmatched) notes.push(`어느 갈래에도 맞지 않은 건 ${sym.unmatched.toLocaleString()}건`);
+  if (sym.noText) notes.push(`업무내용이 비어 있는 건 ${sym.noText.toLocaleString()}건`);
+
+  return `<div class="p-sec"><h2>① 자산번호별 반복 (${rep.list.length}대)</h2>
+      ${assets || "<p class='p-note'>해당 없음</p>"}</div>
+    <div class="p-sec"><h2>② 같은 증상으로 묶인 갈래 (${sym.list.length}갈래)</h2>
+      <p class="p-note">업무내용의 낱말로 갈래를 짚은 것입니다. 여러 자산에서 같은 증상이 나오면
+        개별 고장이 아니라 공통 원인일 수 있습니다. 아래 원인과 순서는 일반적인 확인 절차이므로
+        현장 판단이 우선입니다.</p>
+      ${syms || "<p class='p-note'>해당 없음</p>"}</div>
+    ${notes.length ? `<p class="p-note">집계에서 빠진 건: ${notes.join(" · ")} — 억지로 끼워 맞추지 않고 따로 셉니다.</p>` : ""}`;
+}
+
+/* 한 줄에서 '자세히 보기'를 눌렀을 때 */
+els.content.addEventListener("click", (e) => {
+  if (!e.target.closest("[data-repeat-open]")) return;
+  if (!REPEAT_LAST) return;
+  openModal(
+    `반복 이슈 · 교체 검토 후보`,
+    repeatModalHtml(REPEAT_LAST.repeat, REPEAT_LAST.symptoms)
   );
+});
+
+/* 팝업 안의 'PDF로 저장' */
+els.modalBody.addEventListener("click", (e) => {
+  if (!e.target.closest("[data-print-repeat]")) return;
+  if (!REPEAT_LAST) return;
+  printDocument({
+    fileName: `워크보드_반복이슈_${csvStamp()}`,
+    heading: "전산 반복 이슈 · 교체 검토 후보",
+    meta: `반복 자산 ${REPEAT_LAST.repeat.list.length}대 · 같은 증상 ${REPEAT_LAST.symptoms.list.length}갈래`,
+    body: repeatPrintHtml(REPEAT_LAST.repeat, REPEAT_LAST.symptoms),
+  });
 });
 
 function renderJeonsan() {
@@ -3115,6 +3593,8 @@ function renderJeonsan() {
   const doneCount = status.filter((r) => (r["진행상태"] || "").includes("완료")).length;
   const ingCount = status.length - doneCount;
   const repeat = repeatAssets(status);
+  const symptoms = symptomGroups(status);
+  REPEAT_LAST = { repeat, symptoms }; // 팝업과 인쇄에서 다시 씁니다
 
   const now = new Date();
   const monthLabel = `${now.getFullYear()}년 ${now.getMonth() + 1}월`;
@@ -3136,10 +3616,9 @@ function renderJeonsan() {
       ${kpiCard("완료", doneCount + "건")}
       ${kpiCard("진행중/미완료", ingCount + "건")}
       ${kpiCard("자산 지급대장 건수", asset.length + "건")}
-      ${kpiCard("반복 이슈 자산", repeat.list.length + "대", REPEAT_MIN + "건 이상 접수된 자산번호")}
     </div>
 
-    ${repeatPanel(repeat)}
+    ${repeatBar(repeat, symptoms)}
 
     <h2 class="section-title">담당자</h2>
     <p class="section-note">이름을 누르면 월별 처리 건수를 볼 수 있습니다.</p>
